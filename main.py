@@ -18,7 +18,7 @@ from oandapyV20.exceptions import V20Error
 from oandapyV20.endpoints.instruments import InstrumentsCandles
 from tensorflow.keras.models import load_model
 from collections import deque
-
+import sys
 # Initialize Flask
 app = Flask(__name__)
 
