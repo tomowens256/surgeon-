@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trading Journal</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .journal-entry { margin-bottom: 20px; border-left: 4px solid #0d6efd; padding-left: 15px; }
+        .entry-signal { border-color: #198754; }
+        .entry-note { border-color: #0dcaf0; }
+        .entry-image { max-width: 100%; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="my-4">Trading Journal</h1>
+        
+        <!-- New Entry Form -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Add New Entry</h5>
+                <form id="journal-form">
+                    <div class="mb-3">
+                        <select class="form-select" id="entry-type">
+                            <option value="note">Note</option>
+                            <option value="signal">Signal Analysis</option>
+                            <option value="review">Trade Review</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <textarea class="form-control" id="entry-content" rows="3" 
+                                  placeholder="Write your journal entry..."></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="image-url" 
+                               placeholder="Image URL (optional)">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Add Entry</button>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Journal Entries -->
+        <div id="journal-entries"></div>
+    </div>
+
+    <script>
+        // Load journal entries
+        function loadJournal() {
+            fetch('/journal/entries')
+                .then(r => r.json())
+                .then(entries => {
+                    let html = '';
+                    entries.reverse().forEach(entry => {
+                        const date = new Date(entry.timestamp * 1000);
+                        const dateStr = date.toLocaleString();
+                        
+                        html += `<div class="journal-entry entry-${entry.type}">
+                            <div class="d-flex justify-content-between">
+                                <strong>${entry.type.toUpperCase()}</strong>
+                                <small>${dateStr}</small>
+                            </div>
+                            <div>${entry.content}</div>
+                            ${entry.image ? `<img src="${entry.image}" class="entry-image">` : ''}
+                        </div>`;
+                    });
+                    
+                    document.getElementById('journal-entries').innerHTML = html;
+                });
+        }
+        
+        // Add new entry
+        document.getElementById('journal-form').addEventListener('submit', e => {
+            e.preventDefault();
+            
+            const entry = {
+                type: document.getElementById('entry-type').value,
+                content: document.getElementById('entry-content').value,
+                image: document.getElementById('image-url').value
+            };
+            
+            fetch('/journal/add', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(entry)
+            }).then(() => {
+                document.getElementById('journal-form').reset();
+                loadJournal();
+            });
+        });
+        
+        // Initial load
+        loadJournal();
+    </script>
+</body>
+</html>
