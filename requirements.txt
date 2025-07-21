@@ -1,7 +1,7 @@
 flask==2.3.2
 pandas==2.0.3
 numpy==1.24.3
-pandas_ta==0.3.13  # Changed from 0.3.14 to 0.3.13
+pandas_ta   #==0.3.13  # Changed from 0.3.14 to 0.3.13
 requests==2.31.0
 oandapyV20==0.6.3
 pytz==2023.3
