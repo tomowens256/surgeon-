@@ -26,10 +26,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         
-    - name: Verify models
-      run: |
-        ls -lh ml_models/
-        echo "Models found: $(find ml_models/ -type f | wc -l)"
     - name: Test Telegram connection
       run: |
         echo "Testing Telegram connectivity..."
@@ -43,13 +39,18 @@ jobs:
         else
           echo "❌ Telegram test failed: $response"
           exit 1
-        fi    
+        fi
+        
+    - name: Verify models
+      run: |
+        ls -lh ml_models/
+        echo "Models found: $(find ml_models/ -type f | wc -l)"
+        
     - name: Run Trading Bot
       env:
         OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
         OANDA_API_KEY: ${{ secrets.OANDA_API_KEY }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        TF_CPP_MIN_LOG_LEVEL: 3
-      run: |
-        python main.py
+        TF_CPP_MIN_LOG_LEVEL: 3  # Suppress TensorFlow debug logs
+      run: python main.py
