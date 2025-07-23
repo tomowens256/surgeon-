@@ -664,7 +664,8 @@ class CandleScheduler(threading.Thread):
 # TRADING DETECTOR
 # ========================
 class TradingDetector:
-    def __init__(self, model_path='./ml_models', scaler_path='scaler_oversample.joblib'):
+    def __init__(self, model_path='/home/runner/work/surgeon-/surgeon-/ml_models', scaler_path='/home/runner/work/surgeon-/surgeon-/ml_models'):
+        
         self.data = pd.DataFrame()
         self.feature_engineer = FeatureEngineer(history_size=200)
         self.models = []
