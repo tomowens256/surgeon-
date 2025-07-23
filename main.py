@@ -110,35 +110,79 @@ def send_telegram(message):
         return False
 
 def fetch_candles():
-    """Fetch candles for XAU_USD M15 only"""
+    """Fetch candles for XAU_USD M15 with robust error handling"""
     params = {
         "granularity": TIMEFRAME,
         "count": 200,
-        "price": "BA"
+        "price": "M"  # Changed from BA to M for midpoint prices
     }
-    try:
-        request = instruments.InstrumentsCandles(instrument=INSTRUMENT, params=params)
-        response = oanda_api.request(request)
-        candles = response.get('candles', [])
-        
-        data = []
-        for candle in candles:
-            if candle['complete']:
+    
+    sleep_time = 10  # Initial sleep time for backoff
+    max_attempts = 3
+    
+    for attempt in range(max_attempts):
+        try:
+            request = instruments.InstrumentsCandles(instrument=INSTRUMENT, params=params)
+            response = oanda_api.request(request)
+            candles = response.get('candles', [])
+            
+            if not candles:
+                logging.warning("No candles received from Oanda")
+                return pd.DataFrame()
+            
+            data = []
+            for candle in candles:
+                if not candle.get('complete', False):
+                    continue
+                    
+                # Handle different price types
+                price_data = None
+                if 'mid' in candle:
+                    price_data = candle['mid']
+                elif 'bid' in candle and 'ask' in candle:
+                    # Calculate midpoint if mid not available
+                    price_data = {
+                        'o': str((float(candle['bid']['o']) + float(candle['ask']['o'])) / 2),
+                        'h': str((float(candle['bid']['h']) + float(candle['ask']['h'])) / 2),
+                        'l': str((float(candle['bid']['l']) + float(candle['ask']['l'])) / 2),
+                        'c': str((float(candle['bid']['c']) + float(candle['ask']['c'])) / 2)
+                    }
+                else:
+                    logging.warning(f"Skipping candle with missing price data: {candle}")
+                    continue
+                
                 data.append({
                     'time': parse_oanda_time(candle['time']),
-                    'open': float(candle['mid']['o']),
-                    'high': float(candle['mid']['h']),
-                    'low': float(candle['mid']['l']),
-                    'close': float(candle['mid']['c']),
-                    'volume': int(candle['volume'])
+                    'open': float(price_data['o']),
+                    'high': float(price_data['h']),
+                    'low': float(price_data['l']),
+                    'close': float(price_data['c']),
+                    'volume': int(candle.get('volume', 0))
                 })
-        return pd.DataFrame(data)
-    except V20Error as e:
-        logging.error(f"Oanda error: {e}")
-        return pd.DataFrame()
-    except Exception as e:
-        logging.exception(f"Failed to fetch candles")
-        return pd.DataFrame()
+            
+            if not data:
+                logging.warning("No complete candles found in response")
+                return pd.DataFrame()
+                
+            return pd.DataFrame(data)
+            
+        except V20Error as e:
+            if "rate" in str(e).lower():
+                logging.warning(f"Rate limit hit, sleeping {sleep_time}s (attempt {attempt+1}/{max_attempts})")
+                time.sleep(sleep_time)
+                sleep_time *= 2  # Exponential backoff
+            else:
+                logging.error(f"Oanda API error: {e}")
+                return pd.DataFrame()
+        except KeyError as e:
+            logging.error(f"Key error in candle data: {e}")
+            return pd.DataFrame()
+        except Exception as e:
+            logging.exception(f"Unexpected error fetching candles: {e}")
+            return pd.DataFrame()
+    
+    logging.error(f"Failed to fetch candles after {max_attempts} attempts")
+    return pd.DataFrame()
 
 # ========================
 # MODEL VALIDATION SYSTEM
@@ -362,18 +406,30 @@ class TradingDetector:
             })
     
     def update_data(self, df_new):
-        if self.data.empty:
-            self.data = df_new
-        else:
-            df_combined = pd.concat([self.data, df_new])
-            df_combined = df_combined.drop_duplicates(subset=['time'], keep='last')
-            self.data = df_combined.sort_values('time').reset_index(drop=True)
-        
-        self.check_signals()
-    
-    def check_signals(self):
-        if len(self.data) < 10:
+        """Update data with new candles with error handling"""
+        if df_new.empty:
+            logging.warning("Received empty dataframe in update_data")
             return
+        
+        try:
+            if self.data.empty:
+                self.data = df_new
+            else:
+                # Merge new data with existing
+                df_combined = pd.concat([self.data, df_new])
+                
+                # Remove duplicates based on time
+                df_combined = df_combined.drop_duplicates(subset=['time'], keep='last')
+                
+                # Sort by time and reset index
+                self.data = df_combined.sort_values('time').reset_index(drop=True)
+            
+            # Check for signals only if we have sufficient data
+            if len(self.data) > self.feature_engineer.history_size:
+                self.check_signals()
+                
+        except Exception as e:
+            logging.exception("Error in update_data")
             
         # PLACEHOLDER: ADD YOUR ACTUAL SIGNAL DETECTION LOGIC HERE
         # This should be replaced with your CRT detection algorithm
