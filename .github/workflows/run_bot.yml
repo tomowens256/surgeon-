@@ -7,7 +7,7 @@ on:
 jobs:
   trade:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # 5h50m (leaves 10min buffer)
+    timeout-minutes: 350
     
     steps:
     - name: Checkout repository
@@ -18,11 +18,10 @@ jobs:
       with:
         python-version: '3.10'
         
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
-      
-    - name: Install Python dependencies
+    - name: Install dependencies
       run: |
+        sudo apt-get update
+        sudo apt-get install -y libopenblas-dev
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         
@@ -31,7 +30,7 @@ jobs:
         echo "Testing Telegram connectivity..."
         response=$(curl -s -X POST \
           -H "Content-Type: application/json" \
-          -d '{"chat_id":"'${{ secrets.TELEGRAM_CHAT_ID }}'", "text":"Test message from GitHub Actions"}' \
+          -d '{"chat_id":"'${{ secrets.TELEGRAM_CHAT_ID }}'", "text":"GitHub Actions connection test"}' \
           https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage)
         
         if [[ $response == *"\"ok\":true"* ]]; then
@@ -41,16 +40,10 @@ jobs:
           exit 1
         fi
         
-    - name: Verify models
-      run: |
-        ls -lh ml_models/
-        echo "Models found: $(find ml_models/ -type f | wc -l)"
-        
     - name: Run Trading Bot
       env:
         OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
         OANDA_API_KEY: ${{ secrets.OANDA_API_KEY }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        TF_CPP_MIN_LOG_LEVEL: 3  # Suppress TensorFlow debug logs
       run: python main.py
