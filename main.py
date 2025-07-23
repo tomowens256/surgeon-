@@ -9,6 +9,7 @@ import pandas as pd
 import pandas_ta as ta
 import joblib
 import requests
+import re
 from datetime import datetime, timedelta
 from tensorflow.keras.models import load_model
 from flask import Flask, render_template, request, jsonify
@@ -46,25 +47,23 @@ API_KEY = os.getenv("OANDA_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Instruments and timeframes
-INSTRUMENTS = ["EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD", "NZD_USD", "USD_CAD", "XAU_USD"]
-TIMEFRAMES = ["M5", "M15", "H1"]
+# Only needed instrument and timeframe
+INSTRUMENT = "XAU_USD"
+TIMEFRAME = "M15"
 
 # Global variables
 GLOBAL_LOCK = threading.Lock()
 CRT_SIGNAL_COUNT = 0
 LAST_SIGNAL_TIME = 0
-SIGNALS = deque(maxlen=100)  # Store recent signals for UI
-TRADE_JOURNAL = deque(maxlen=50)  # Journal entries
-PERF_CACHE = {"updated": 0, "data": None}  # Cached performance metrics
+SIGNALS = deque(maxlen=100)
+TRADE_JOURNAL = deque(maxlen=50)
+PERF_CACHE = {"updated": 0, "data": None}
 
 # Initialize logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()]
 )
 
 # Initialize Oanda API
@@ -76,6 +75,12 @@ app = Flask(__name__)
 # ========================
 # UTILITY FUNCTIONS
 # ========================
+def parse_oanda_time(time_str):
+    """Parse Oanda's timestamp with variable fractional seconds"""
+    if '.' in time_str and len(time_str.split('.')[1]) > 7:
+        time_str = re.sub(r'\.(\d{6})\d+', r'.\1', time_str)
+    return datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=pytz.utc).astimezone(NY_TZ)
+
 def send_telegram(message):
     """Send formatted message to Telegram with detailed error handling"""
     if len(message) > 4000:
@@ -89,7 +94,6 @@ def send_telegram(message):
             'parse_mode': 'Markdown'
         }, timeout=10)
         
-        # Log full response for debugging
         logging.info(f"Telegram response: {response.status_code} - {response.text}")
         
         if response.status_code != 200:
@@ -105,24 +109,23 @@ def send_telegram(message):
         logging.exception(f"Telegram connection failed")
         return False
 
-def fetch_candles(instrument, timeframe, count=200):
-    """Fetch recent candles from Oanda"""
+def fetch_candles():
+    """Fetch candles for XAU_USD M15 only"""
     params = {
-        "granularity": timeframe,
-        "count": count,
+        "granularity": TIMEFRAME,
+        "count": 200,
         "price": "BA"
     }
     try:
-        request = instruments.InstrumentsCandles(instrument=instrument, params=params)
+        request = instruments.InstrumentsCandles(instrument=INSTRUMENT, params=params)
         response = oanda_api.request(request)
         candles = response.get('candles', [])
         
-        # Parse candles into DataFrame
         data = []
         for candle in candles:
             if candle['complete']:
                 data.append({
-                    'time': datetime.strptime(candle['time'], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=pytz.utc).astimezone(NY_TZ),
+                    'time': parse_oanda_time(candle['time']),
                     'open': float(candle['mid']['o']),
                     'high': float(candle['mid']['h']),
                     'low': float(candle['mid']['l']),
@@ -131,10 +134,10 @@ def fetch_candles(instrument, timeframe, count=200):
                 })
         return pd.DataFrame(data)
     except V20Error as e:
-        logging.error(f"Oanda error for {instrument} {timeframe}: {e}")
+        logging.error(f"Oanda error: {e}")
         return pd.DataFrame()
     except Exception as e:
-        logging.exception(f"Failed to fetch candles for {instrument} {timeframe}")
+        logging.exception(f"Failed to fetch candles")
         return pd.DataFrame()
 
 # ========================
@@ -147,16 +150,13 @@ class ModelValidator:
         self.loaded = False
         
     def load_resources(self):
-        """Lazy loading of models to conserve memory"""
         if self.loaded:
             return True
             
         try:
-            # Load scaler
             scaler_path = os.path.join(MODEL_PATH, 'scaler_oversample.joblib')
             self.scaler = joblib.load(scaler_path)
             
-            # Load models
             model_files = [
                 'model_f1_0.0000_20250719_090727.keras',
                 'model_f1_0.0000_20250719_092134.keras',
@@ -181,26 +181,21 @@ class ModelValidator:
             return False
     
     def validate(self, features):
-        """Validate signal using ensemble prediction"""
         if not self.load_resources():
             return False
             
         try:
-            # Convert to numpy array
             if isinstance(features, pd.Series):
                 features = features[FEATURES].values.reshape(1, -1)
             
-            # Scale features
             scaled = self.scaler.transform(features)
             reshaped = scaled.reshape(scaled.shape[0], 1, scaled.shape[1])
             
-            # Get predictions
             predictions = []
             for model in self.models:
                 pred = model.predict(reshaped, verbose=0).flatten()
                 predictions.append(pred)
             
-            # Average probabilities
             avg_prob = np.mean(predictions, axis=0)[0]
             return avg_prob >= 0.55
         except Exception as e:
@@ -212,27 +207,22 @@ class ModelValidator:
 # ========================
 class FeatureEngineer:
     def __init__(self):
-        self.history_size = 200  # Candles needed for indicators
-    
+        self.history_size = 200
+        
     def transform(self, df_history, signal_type, minutes_closed):
-        """Generate features for current candle"""
         try:
-            # Use last row as base
             features = df_history.iloc[-1].copy()
             
-            # Add signal-specific features
             features['trade_type_BUY'] = 1 if signal_type == 'BUY' else 0
             features['trade_type_SELL'] = 1 if signal_type == 'SELL' else 0
             features['crt_BUY'] = 1 if features.get('crt') == 'BUY' else 0
             features['crt_SELL'] = 1 if features.get('crt') == 'SELL' else 0
             
-            # Add minute feature
             minute_col = f'minutes,closed_{minutes_closed}'
             for col in ['minutes,closed_0', 'minutes,closed_15', 
                         'minutes,closed_30', 'minutes,closed_45']:
                 features[col] = 1 if col == minute_col else 0
             
-            # Ensure all features exist
             for feature in FEATURES:
                 if feature not in features:
                     features[feature] = 0
@@ -259,7 +249,6 @@ class CandleScheduler(threading.Thread):
         self.callback = callback
         
     def calculate_next_candle(self):
-        """Calculate next candle time precisely"""
         now = datetime.now(NY_TZ)
         current_minute = now.minute
         remainder = current_minute % self.timeframe
@@ -276,7 +265,6 @@ class CandleScheduler(threading.Thread):
         return next_candle
     
     def calculate_minutes_closed(self):
-        """Calculate minutes closed feature"""
         now = datetime.now(NY_TZ)
         if self.next_candle:
             elapsed = (now - (self.next_candle - timedelta(minutes=self.timeframe))).total_seconds() / 60
@@ -286,27 +274,22 @@ class CandleScheduler(threading.Thread):
         return 0
     
     def run(self):
-        """Main scheduling loop"""
         while self.active:
             try:
-                # Calculate next candle time
                 self.next_candle = self.calculate_next_candle()
                 now = datetime.now(NY_TZ)
                 sleep_seconds = (self.next_candle - now).total_seconds()
                 
-                # Sleep until next candle
                 if sleep_seconds > 0:
                     logging.info(f"Sleeping {sleep_seconds:.1f}s until next candle")
                     time.sleep(sleep_seconds)
                 
-                # Process within first 30 seconds
                 start_time = time.time()
                 self.minutes_closed = self.calculate_minutes_closed()
                 
                 if self.callback:
                     self.callback(self.minutes_closed)
                 
-                # Sleep remainder of processing window
                 processing_time = time.time() - start_time
                 if processing_time < 30:
                     time.sleep(30 - processing_time)
@@ -319,9 +302,7 @@ class CandleScheduler(threading.Thread):
 # ========================
 class TradingDetector:
     def __init__(self):
-        self.data = {pair: {tf: pd.DataFrame(columns=['time', 'open', 'high', 'low', 'close', 'volume']) 
-                     for tf in TIMEFRAMES} for pair in INSTRUMENTS}
-        self.last_alert = {pair: {tf: None for tf in TIMEFRAMES} for pair in INSTRUMENTS}
+        self.data = pd.DataFrame()
         self.validator = ModelValidator()
         self.feature_engineer = FeatureEngineer()
         self.scheduler = CandleScheduler(timeframe=15)
@@ -330,43 +311,31 @@ class TradingDetector:
         self.scheduler.start()
         
     def process_pending_signals(self, minutes_closed):
-        """Process queued signals at new candle start"""
-        if not self.pending_signals:
+        if not self.pending_signals or self.data.empty:
             return
             
-        processed_signals = []
-        for signal in self.pending_signals:
-            pair, tf, signal_info = signal
-            try:
-                # Get historical data
-                df_history = self.data[pair][tf].tail(self.feature_engineer.history_size)
-                if len(df_history) < self.feature_engineer.history_size:
-                    continue
+        try:
+            df_history = self.data.tail(self.feature_engineer.history_size)
+            if len(df_history) < self.feature_engineer.history_size:
+                return
                 
-                # Generate features
+            for signal in list(self.pending_signals):
                 features = self.feature_engineer.transform(
                     df_history, 
-                    signal_info['signal'], 
+                    signal['signal'], 
                     minutes_closed
                 )
                 
                 if features is None:
                     continue
                 
-                # Validate with ML
                 if self.validator.validate(features):
-                    self.trigger_alert(signal_info)
-                    processed_signals.append(signal)
-            except Exception as e:
-                logging.error(f"Signal processing error: {e}")
-        
-        # Remove processed signals
-        for signal in processed_signals:
-            if signal in self.pending_signals:
-                self.pending_signals.remove(signal)
+                    self.trigger_alert(signal)
+                    self.pending_signals.remove(signal)
+        except Exception as e:
+            logging.error(f"Signal processing error: {e}")
     
     def trigger_alert(self, signal_info):
-        """Send validated alert"""
         global CRT_SIGNAL_COUNT, LAST_SIGNAL_TIME
         
         with GLOBAL_LOCK:
@@ -375,59 +344,74 @@ class TradingDetector:
         
         alert_time = signal_info['time'].astimezone(NY_TZ)
         send_telegram(
-            f"🚀 *VALIDATED CRT* {signal_info['pair'].replace('_','/')} {signal_info['signal']}\n"
-            f"Timeframe: {signal_info['timeframe']}\n"
+            f"🚀 *VALIDATED CRT* XAU/USD {signal_info['signal']}\n"
+            f"Timeframe: M15\n"
             f"Time: {alert_time.strftime('%Y-%m-%d %H:%M')} NY\n"
             f"RSI Zone: {signal_info['rsi_zone']}\n"
             f"Confidence: High"
         )
         
-        # Add to signals for UI
         with GLOBAL_LOCK:
             SIGNALS.append({
                 "time": time.time(),
-                "pair": signal_info['pair'],
-                "timeframe": signal_info['timeframe'],
+                "pair": "XAU_USD",
+                "timeframe": "M15",
                 "signal": signal_info['signal'],
                 "outcome": "pending",
                 "rrr": None
             })
     
-    def update_data(self, instrument, timeframe, df_new):
-        """Update data for a given instrument and timeframe"""
-        if instrument not in self.data or timeframe not in self.data[instrument]:
-            return
-            
-        # Append new data and remove duplicates
-        df_combined = pd.concat([self.data[instrument][timeframe], df_new])
-        df_combined = df_combined.drop_duplicates(subset=['time'], keep='last')
-        self.data[instrument][timeframe] = df_combined.sort_values('time').reset_index(drop=True)
+    def update_data(self, df_new):
+        if self.data.empty:
+            self.data = df_new
+        else:
+            df_combined = pd.concat([self.data, df_new])
+            df_combined = df_combined.drop_duplicates(subset=['time'], keep='last')
+            self.data = df_combined.sort_values('time').reset_index(drop=True)
         
-        # Check for signals
-        self.check_signals(instrument, timeframe)
+        self.check_signals()
     
-    def check_signals(self, instrument, timeframe):
-        """Check for CRT signal with ML validation"""
-        df = self.data[instrument][timeframe]
-        if len(df) < 10:
+    def check_signals(self):
+        if len(self.data) < 10:
             return
             
-        # ... [Implement your specific signal detection logic here] ...
-        # For now, we'll simulate a signal every 10 candles for testing
-        if len(df) % 10 == 0:
-            signal_info = {
-                'signal': 'BUY' if len(df) % 20 == 0 else 'SELL',
-                'time': df.iloc[-1]['time'],
-                'pair': instrument,
-                'timeframe': timeframe,
-                'rsi_zone': 'overbought' if len(df) % 20 == 0 else 'oversold'
-            }
-            # For XAU_USD 15m, queue for ML validation
-            if instrument == "XAU_USD" and timeframe == "M15":
-                self.pending_signals.append((instrument, timeframe, signal_info))
-                logging.info(f"Signal queued for validation: {signal_info['signal']} at {signal_info['time']}")
-            else:
-                self.trigger_alert(signal_info)
+        # PLACEHOLDER: ADD YOUR ACTUAL SIGNAL DETECTION LOGIC HERE
+        # This should be replaced with your CRT detection algorithm
+        last_row = self.data.iloc[-1]
+        
+        # Example signal detection (simplified for demonstration)
+        # Calculate RSI
+        rsi = ta.rsi(self.data['close'], length=14)
+        if len(rsi) == 0:
+            return
+            
+        current_rsi = rsi.iloc[-1]
+        
+        # Determine RSI zone
+        if current_rsi > 70:
+            rsi_zone = "overbought"
+        elif current_rsi < 30:
+            rsi_zone = "oversold"
+        else:
+            rsi_zone = "neutral"
+            
+        # Detect potential signals based on RSI zone
+        if rsi_zone == "overbought":
+            signal_type = "SELL"
+        elif rsi_zone == "oversold":
+            signal_type = "BUY"
+        else:
+            return
+            
+        # Add signal to pending queue
+        signal_info = {
+            'signal': signal_type,
+            'time': last_row['time'],
+            'rsi_zone': rsi_zone
+        }
+        
+        self.pending_signals.append(signal_info)
+        logging.info(f"Signal queued for validation: {signal_type}")
 
 # ========================
 # FLASK UI ROUTES
@@ -451,7 +435,6 @@ def metrics():
 @app.route('/signals')
 def signals():
     with GLOBAL_LOCK:
-        # Convert deque to list and take last 20
         return jsonify(list(SIGNALS)[-20:])
 
 @app.route('/journal/entries')
@@ -473,15 +456,13 @@ def add_entry():
 # SUPPORT FUNCTIONS FOR UI
 # ========================
 def calculate_performance_metrics():
-    """Calculate key metrics with 5-minute cache"""
     global PERF_CACHE
     
     if time.time() - PERF_CACHE["updated"] < 300 and PERF_CACHE["data"]:
         return PERF_CACHE["data"]
     
     with GLOBAL_LOCK:
-        # Calculate metrics from recent signals
-        recent_signals = list(SIGNALS)[-100:]  # Last 100 signals
+        recent_signals = list(SIGNALS)[-100:]
         
         if not recent_signals:
             return {
@@ -491,24 +472,20 @@ def calculate_performance_metrics():
                 "asset_dist": {}
             }
         
-        # Win rate calculation
         wins = sum(1 for s in recent_signals if s.get('outcome') == 'win')
         win_rate = round((wins / len(recent_signals)) * 100, 1) if recent_signals else 0
         
-        # Risk-reward ratio
         rrr_values = [s.get('rrr', 0) for s in recent_signals if s.get('rrr') is not None]
         avg_rrr = round(np.mean(rrr_values), 2) if rrr_values else 0
         
-        # Hourly distribution
         hourly_dist = {}
         for signal in recent_signals:
             hour = datetime.fromtimestamp(signal['time']).hour
             hourly_dist[hour] = hourly_dist.get(hour, 0) + 1
         
-        # Asset distribution
         asset_dist = {}
         for signal in recent_signals:
-            pair = signal['pair'].split('_')[0]  # Extract base currency
+            pair = signal['pair'].split('_')[0]
             asset_dist[pair] = asset_dist.get(pair, 0) + 1
         
         metrics = {
@@ -522,7 +499,6 @@ def calculate_performance_metrics():
         return metrics
 
 def add_journal_entry(entry_type, content, image_url=None):
-    """Add entry to trading journal"""
     with GLOBAL_LOCK:
         TRADE_JOURNAL.append({
             "timestamp": time.time(),
@@ -535,36 +511,23 @@ def add_journal_entry(entry_type, content, image_url=None):
 # MAIN BOT OPERATION
 # ========================
 def run_bot():
-    """Main trading bot loop"""
-    # Send startup notification
-    send_telegram(f"🚀 *Bot Started*\nEnvironment: GitHub Actions\nAccount: {ACCOUNT_ID}\nTime: {datetime.now(NY_TZ)}")
+    send_telegram(f"🚀 *Bot Started*\nInstrument: XAU/USD\nTimeframe: M15\nTime: {datetime.now(NY_TZ)}")
     
-    # Initialize detector
     detector = TradingDetector()
-    
-    # Data refresh interval (seconds)
     refresh_interval = 300  # 5 minutes
     
-    # Main loop
     while True:
         try:
-            # Refresh data for all instruments and timeframes
-            for instrument in INSTRUMENTS:
-                for timeframe in TIMEFRAMES:
-                    df = fetch_candles(instrument, timeframe)
-                    if not df.empty:
-                        detector.update_data(instrument, timeframe, df)
+            df = fetch_candles()
+            if not df.empty:
+                detector.update_data(df)
             
-            # Sleep until next refresh
             time.sleep(refresh_interval)
         except Exception as e:
-            logging.exception("Critical error in main loop")
+            logging.exception("Main loop error")
             time.sleep(60)
 
 if __name__ == "__main__":
-    # Start bot in a separate thread
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
-    
-    # Start Flask app
     app.run(host='0.0.0.0', port=5000)
