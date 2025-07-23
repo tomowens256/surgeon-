@@ -1,7 +1,7 @@
 name: Run Trading Bot
 on:
   schedule:
-    - cron: '50 */5 * * *'  # Run at minute 50 of every 5th hour
+    - cron: '*/15 * * * *'  # Run every 15 minutes
   workflow_dispatch:
 
 jobs:
@@ -39,6 +39,11 @@ jobs:
           echo "❌ Telegram test failed: $response"
           exit 1
         fi
+        
+    - name: Debug ml_models folder
+      run: |
+        echo "Listing contents of ml_models folder:"
+        ls -la ml_models/ || echo "ml_models folder not found or empty"
         
     - name: Run Trading Bot
       env:
