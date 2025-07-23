@@ -180,14 +180,149 @@ def fetch_candles():
 # FEATURE ENGINEER
 # ========================
 class FeatureEngineer:
-    def __init__(self, history_size=200, combo_stats_file='combo_stats.csv'):
+    def __init__(self, history_size=200):
         self.history_size = history_size
-        try:
-            self.combo_stats = pd.read_csv(combo_stats_file) if combo_stats_file else pd.DataFrame()
-            logging.info("Combo stats loaded successfully")
-        except Exception as e:
-            logging.warning(f"Failed to load combo_stats: {e}. Defaulting to empty DataFrame")
-            self.combo_stats = pd.DataFrame()
+        # Hardcoded combo flags from combo_flags.csv as tuples
+        self.combo_flags = (
+            ("SELL_sideways_nan", "dead"),
+            ("BUY_sideways_nan", "dead"),
+            ("SELL_sideways_(70, 80]", "dead"),
+            ("BUY_sideways_(70, 80]", "fine"),
+            ("SELL_sideways_(60, 70]", "fair"),
+            ("SELL_sideways_(50, 60]", "fair"),
+            ("BUY_sideways_(50, 60]", "fine"),
+            ("BUY_sideways_(60, 70]", "fine"),
+            ("BUY_sideways_(40, 50]", "fair"),
+            ("SELL_sideways_(40, 50]", "fine"),
+            ("SELL_sideways_(30, 40]", "fine"),
+            ("SELL_uptrend_(50, 60]", "fine"),
+            ("BUY_uptrend_(50, 60]", "fair"),
+            ("SELL_uptrend_(40, 50]", "fine"),
+            ("BUY_downtrend_(40, 50]", "fair"),
+            ("BUY_uptrend_(60, 70]", "fine"),
+            ("SELL_uptrend_(60, 70]", "fair"),
+            ("BUY_uptrend_(40, 50]", "fair"),
+            ("SELL_downtrend_(40, 50]", "fair"),
+            ("BUY_uptrend_(30, 40]", "dead"),
+            ("BUY_downtrend_(30, 40]", "fair"),
+            ("BUY_downtrend_(50, 60]", "fine"),
+            ("SELL_downtrend_(50, 60]", "fair"),
+            ("SELL_downtrend_(30, 40]", "fine"),
+            ("BUY_uptrend_(70, 80]", "fine"),
+            ("SELL_uptrend_(70, 80]", "fair"),
+            ("SELL_uptrend_(80, 100]", "dead"),
+            ("SELL_downtrend_(20, 30]", "fine"),
+            ("SELL_sideways_(80, 100]", "dead"),
+            ("BUY_sideways_(30, 40]", "fair"),
+            ("SELL_downtrend_(60, 70]", "dead"),
+            ("SELL_uptrend_(30, 40]", "fine"),
+            ("SELL_downtrend_(70, 80]", "dead"),
+            ("BUY_downtrend_(20, 30]", "fair"),
+            ("BUY_downtrend_(0, 20]", "dead"),
+            ("BUY_sideways_(20, 30]", "dead"),
+            ("SELL_sideways_(20, 30]", "fine"),
+            ("BUY_downtrend_(60, 70]", "fine"),
+            ("BUY_sideways_(0, 20]", "dead"),
+            ("SELL_downtrend_(0, 20]", "fine"),
+            ("BUY_uptrend_(80, 100]", "fine"),
+            ("SELL_sideways_(0, 20]", "fine"),
+            ("BUY_sideways_(80, 100]", "fine"),
+            ("SELL_uptrend_(20, 30]", "fine"),
+            ("BUY_downtrend_(70, 80]", "fine"),
+            ("BUY_uptrend_(20, 30]", "dead"),
+            ("SELL_downtrend_(80, 100]", "dead"),
+            ("BUY_uptrend_(0, 20]", "dead"),
+            ("SELL_uptrend_(0, 20]", "dead"),
+            ("nan_sideways_(50, 60]", "dead"),
+            ("nan_sideways_(40, 50]", "dead")
+        )
+        # Hardcoded combo flags2 from combo_flags2.csv as tuples
+        self.combo_flags2 = (
+            ("SELL_nan_nan", "dead"),
+            ("BUY_nan_nan", "dead"),
+            ("SELL_(70, 80]_nan", "dead"),
+            ("BUY_(70, 80]_nan", "dead"),
+            ("SELL_(70, 80]_(0.527, 9.246]", "fair"),
+            ("SELL_(60, 70]_(0.527, 9.246]", "fair"),
+            ("SELL_(50, 60]_(0.527, 9.246]", "fine"),
+            ("BUY_(50, 60]_(0.527, 9.246]", "fair"),
+            ("BUY_(60, 70]_(0.527, 9.246]", "fine"),
+            ("BUY_(40, 50]_(0.134, 0.527]", "fair"),
+            ("SELL_(40, 50]_(0.134, 0.527]", "fine"),
+            ("SELL_(30, 40]_(0.134, 0.527]", "fine"),
+            ("BUY_(40, 50]_(-0.138, 0.134]", "fair"),
+            ("SELL_(50, 60]_(-0.138, 0.134]", "fair"),
+            ("BUY_(50, 60]_(-0.138, 0.134]", "fine"),
+            ("SELL_(40, 50]_(-0.138, 0.134]", "fine"),
+            ("BUY_(40, 50]_(-0.496, -0.138]", "fair"),
+            ("BUY_(60, 70]_(-0.138, 0.134]", "fine"),
+            ("SELL_(60, 70]_(0.134, 0.527]", "fair"),
+            ("BUY_(50, 60]_(0.134, 0.527]", "fair"),
+            ("SELL_(50, 60]_(0.134, 0.527]", "fine"),
+            ("SELL_(40, 50]_(-0.496, -0.138]", "fair"),
+            ("SELL_(30, 40]_(-0.496, -0.138]", "fine"),
+            ("BUY_(40, 50]_(-12.386, -0.496]", "fine"),
+            ("BUY_(60, 70]_(0.134, 0.527]", "fine"),
+            ("BUY_(30, 40]_(-0.496, -0.138]", "fair"),
+            ("BUY_(50, 60]_(-0.496, -0.138]", "fine"),
+            ("BUY_(30, 40]_(-0.138, 0.134]", "dead"),
+            ("SELL_(50, 60]_(-0.496, -0.138]", "fair"),
+            ("BUY_(70, 80]_(0.134, 0.527]", "fine"),
+            ("SELL_(80, 100]_(0.527, 9.246]", "dead"),
+            ("BUY_(70, 80]_(0.527, 9.246]", "fine"),
+            ("SELL_(40, 50]_(0.527, 9.246]", "fine"),
+            ("SELL_(40, 50]_(-12.386, -0.496]", "fair"),
+            ("BUY_(30, 40]_(-12.386, -0.496]", "fair"),
+            ("SELL_(30, 40]_(-12.386, -0.496]", "fine"),
+            ("SELL_(20, 30]_(-12.386, -0.496]", "fine"),
+            ("BUY_(50, 60]_(-12.386, -0.496]", "fine"),
+            ("SELL_(80, 100]_(-0.496, -0.138]", "dead"),
+            ("SELL_(30, 40]_(-0.138, 0.134]", "fine"),
+            ("SELL_(70, 80]_(-0.138, 0.134]", "dead"),
+            ("SELL_(50, 60]_(-12.386, -0.496]", "dead"),
+            ("BUY_(40, 50]_(0.527, 9.246]", "dead"),
+            ("SELL_(20, 30]_(-0.496, -0.138]", "fine"),
+            ("BUY_(20, 30]_(-12.386, -0.496]", "fair"),
+            ("BUY_(0, 20]_(-12.386, -0.496]", "dead"),
+            ("SELL_(60, 70]_(-0.138, 0.134]", "dead"),
+            ("BUY_(20, 30]_(-0.496, -0.138]", "dead"),
+            ("BUY_(60, 70]_(-0.496, -0.138]", "fine"),
+            ("BUY_(70, 80]_(-0.138, 0.134]", "fine"),
+            ("SELL_(70, 80]_(0.134, 0.527]", "dead"),
+            ("SELL_(0, 20]_(-12.386, -0.496]", "fine"),
+            ("BUY_(80, 100]_(0.527, 9.246]", "fine"),
+            ("SELL_(60, 70]_(-0.496, -0.138]", "dead"),
+            ("SELL_(30, 40]_(0.527, 9.246]", "fine"),
+            ("BUY_(30, 40]_(0.134, 0.527]", "dead"),
+            ("SELL_(60, 70]_(-12.386, -0.496]", "dead"),
+            ("BUY_(60, 70]_(-12.386, -0.496]", "fine"),
+            ("BUY_(80, 100]_(-0.496, -0.138]", "fine"),
+            ("BUY_(80, 100]_(0.134, 0.527]", "fine"),
+            ("SELL_(20, 30]_(-0.138, 0.134]", "fine"),
+            ("SELL_(0, 20]_(-0.496, -0.138]", "fair"),
+            ("BUY_(30, 40]_(0.527, 9.246]", "dead"),
+            ("BUY_(20, 30]_(-0.138, 0.134]", "dead"),
+            ("SELL_(70, 80]_(-0.496, -0.138]", "dead"),
+            ("BUY_(80, 100]_(-0.138, 0.134]", "fine"),
+            ("SELL_(20, 30]_(0.134, 0.527]", "fine"),
+            ("BUY_(0, 20]_(-0.496, -0.138]", "dead"),
+            ("SELL_(80, 100]_(0.134, 0.527]", "fair"),
+            ("BUY_(0, 20]_(-0.138, 0.134]", "dead"),
+            ("BUY_(0, 20]_(0.134, 0.527]", "dead"),
+            ("SELL_(0, 20]_(-0.138, 0.134]", "fine"),
+            ("BUY_(70, 80]_(-0.496, -0.138]", "fine"),
+            ("SELL_(70, 80]_(-12.386, -0.496]", "dead"),
+            ("SELL_(20, 30]_(0.527, 9.246]", "fine"),
+            ("BUY_(20, 30]_(0.134, 0.527]", "dead"),
+            ("SELL_(80, 100]_(-0.138, 0.134]", "dead"),
+            ("BUY_(20, 30]_(0.527, 9.246]", "dead"),
+            ("BUY_(0, 20]_(0.527, 9.246]", "dead"),
+            ("nan_(50, 60]_(-12.386, -0.496]", "dead"),
+            ("nan_(40, 50]_(-0.138, 0.134]", "dead"),
+            ("nan_(40, 50]_(-0.496, -0.138]", "dead"),
+            ("nan_(50, 60]_(0.134, 0.527]", "dead"),
+            ("nan_(50, 60]_(0.527, 9.246]", "dead")
+        )
 
     def calculate_technical_indicators(self, df):
         df = df.copy()
@@ -349,52 +484,27 @@ class FeatureEngineer:
         
         # RSI and MACD bins
         df['rsi_bin'] = pd.cut(df['rsi'], bins=[0, 20, 30, 40, 50, 60, 70, 80, 100])
-        df['macd_z_bin'] = pd.qcut(df['macd_z'], q=5, duplicates='drop')
+        df['macd_z_bin'] = pd.qcut(df['macd_z'], q=5, duplicates='drop', labels=[
+            '(-12.386, -0.496]', '(-0.496, -0.138]', '(-0.138, 0.134]', '(0.134, 0.527]', '(0.527, 9.246]'
+        ])
         
-        # Combo keys
+        # Combo keys calculated from features
         df['trade_type'] = signal_type
         df['combo_key'] = df['trade_type'] + '_' + df['trend_direction'] + '_' + df['rsi_bin'].astype(str)
         df['combo_key2'] = df[['trade_type', 'rsi_bin', 'macd_z_bin']].astype(str).agg('_'.join, axis=1)
         
-        # Apply combo flags
-        if not self.combo_stats.empty:
-            # is_bad_combo
-            bad_combos = self.combo_stats[self.combo_stats['win_rate'] <= 0.05]['combo_key']
-            df['is_bad_combo'] = df['combo_key'].isin(bad_combos).astype(int)
-            
-            # combo_flag
-            def combo_flag(row):
-                if pd.isna(row['win_rate']) or row['total_trades'] < 10:
-                    return 'dead'
-                elif row['win_rate'] <= 0.05:
-                    return 'dead'
-                elif row['win_rate'] <= 0.15:
-                    return 'fair'
-                else:
-                    return 'fine'
-            
-            combo_stats = self.combo_stats.copy()
-            combo_stats['combo_flag'] = combo_stats.apply(combo_flag, axis=1)
-            
-            df = df.merge(
-                combo_stats[['combo_key', 'combo_flag']],
-                on='combo_key',
-                how='left'
-            )
-            df['combo_flag'] = df['combo_flag'].fillna('dead')
-            
-            df = df.merge(
-                combo_stats[['combo_key2', 'combo_flag']],
-                on='combo_key2',
-                how='left',
-                suffixes=('', '2')
-            )
-            df['combo_flag2'] = df['combo_flag2'].fillna('dead')
-        else:
-            df['is_bad_combo'] = 0
-            df['combo_flag'] = 'dead'
-            df['combo_flag2'] = 'dead'
+        # Convert tuple lists to dictionaries for mapping
+        combo_flag_dict = dict(self.combo_flags)
+        combo_flag2_dict = dict(self.combo_flags2)
         
+        # Map calculated combo keys to their flags
+        df['combo_flag'] = df['combo_key'].map(combo_flag_dict).fillna('dead')
+        df['combo_flag2'] = df['combo_key2'].map(combo_flag2_dict).fillna('dead')
+        
+        # is_bad_combo (dead combo_flag or combo_flag2 indicates bad combo)
+        df['is_bad_combo'] = ((df['combo_flag'] == 'dead') | (df['combo_flag2'] == 'dead')).astype(int)
+        
+        # Create dummy variables
         df = pd.get_dummies(df, columns=['combo_flag'], prefix='combo_flag', drop_first=False)
         df = pd.get_dummies(df, columns=['combo_flag2'], prefix='combo_flag2', drop_first=False)
         
@@ -556,7 +666,7 @@ class CandleScheduler(threading.Thread):
 class TradingDetector:
     def __init__(self, model_path='./ml_models', scaler_path='scaler_oversample.joblib'):
         self.data = pd.DataFrame()
-        self.feature_engineer = FeatureEngineer(history_size=200, combo_stats_file='combo_stats.csv')
+        self.feature_engineer = FeatureEngineer(history_size=200)
         self.models = []
         self.scaler = None
         self.model_path = model_path
