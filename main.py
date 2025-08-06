@@ -16,7 +16,6 @@ from oandapyV20.exceptions import V20Error
 import oandapyV20.endpoints.instruments as instruments
 import joblib
 from tensorflow.keras.models import load_model
-import queue
 from collections import defaultdict
 
 # ========================
@@ -58,15 +57,19 @@ def parse_oanda_time(time_str):
         return datetime.now(NY_TZ)
 
 def send_telegram(message):
-    """Send formatted message to Telegram with detailed error handling and retries"""
+    """Send formatted message to Telegram with robust error handling"""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         logger.warning("Telegram credentials not set, skipping message")
         return False
         
+    # Escape MarkdownV2 special characters
+    escape_chars = '_*[]()~`>#+-=|{}.!'
+    for char in escape_chars:
+        message = message.replace(char, '\\' + char)
+    
     if len(message) > 4000:
         message = message[:4000] + "... [TRUNCATED]"
     
-    message = message.replace('_', '\_')  # Escape underscores for Markdown
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     max_retries = 3
     
@@ -75,22 +78,24 @@ def send_telegram(message):
             response = requests.post(url, json={
                 'chat_id': TELEGRAM_CHAT_ID,
                 'text': message,
-                'parse_mode': 'Markdown'
-            }, timeout=10)
+                'parse_mode': 'MarkdownV2'
+            }, timeout=15)
             
             if response.status_code == 200 and response.json().get('ok'):
                 return True
             elif attempt < max_retries - 1:
+                logger.warning(f"Telegram API error ({response.status_code}), retrying...")
                 time.sleep(2 ** attempt)
         except Exception as e:
             if attempt < max_retries - 1:
+                logger.warning(f"Telegram connection error: {str(e)}, retrying...")
                 time.sleep(2 ** attempt)
     
     logger.error(f"Failed to send Telegram message after {max_retries} attempts")
     return False
 
 def fetch_candles(timeframe, last_time=None, candle_count=201):
-    """Fetch candles for specified timeframe"""
+    """Fetch candles for specified timeframe with robust error handling"""
     logger.info(f"Fetching {candle_count} candles for {INSTRUMENT} with timeframe {timeframe}")
     params = {
         "granularity": timeframe,
@@ -113,6 +118,7 @@ def fetch_candles(timeframe, last_time=None, candle_count=201):
             
             if not candles:
                 logger.warning("No candles received from Oanda")
+                time.sleep(sleep_time)
                 continue
             
             data = []
@@ -139,6 +145,8 @@ def fetch_candles(timeframe, last_time=None, candle_count=201):
                     logger.error(f"Error processing candle: {str(e)}")
             
             if not data:
+                logger.warning("No valid candle data processed")
+                time.sleep(sleep_time)
                 continue
                 
             df = pd.DataFrame(data).drop_duplicates(subset=['time'], keep='last')
@@ -147,16 +155,28 @@ def fetch_candles(timeframe, last_time=None, candle_count=201):
             return df
             
         except V20Error as e:
-            if "rate" in str(e).lower() or e.status == 502:
+            error_msg = str(e).lower()
+            if "rate" in error_msg or "too many" in error_msg:
                 wait_time = sleep_time * (2 ** attempt)
                 logger.warning(f"API limit, waiting {wait_time}s (attempt {attempt+1}/{max_attempts})")
                 time.sleep(wait_time)
+            elif "gateway" in error_msg or "502" in error_msg:
+                logger.warning("Oanda gateway error, retrying...")
+                time.sleep(5)
             else:
                 logger.error(f"Oanda API error: {str(e)}")
+                send_telegram(f"⚠️ Oanda API Error: {str(e)}")
+                time.sleep(10)
+        except requests.exceptions.ConnectionError:
+            logger.error("Connection error, retrying...")
+            time.sleep(10)
         except Exception as e:
             logger.error(f"Unexpected error fetching candles: {str(e)}")
+            send_telegram(f"⚠️ Unexpected Candle Fetch Error: {str(e)}")
+            time.sleep(10)
     
     logger.error(f"Failed to fetch candles after {max_attempts} attempts")
+    send_telegram(f"❌ Failed to fetch candles after {max_attempts} attempts")
     return pd.DataFrame()
 
 # ========================
@@ -209,6 +229,7 @@ class FeatureEngineer:
         ]
         
         self.historical_volumes = defaultdict(list)
+        self.last_signal_time = None
 
     def get_same_period_candles(self, df, current_time):
         """Get candles from same time period in previous days"""
@@ -239,9 +260,14 @@ class FeatureEngineer:
             c2 = df.iloc[-2]
             c3 = df.iloc[-1]
             
+            # Skip if historical candles are incomplete
+            if not c1['complete'] or not c2['complete']:
+                logger.debug("Skipping incomplete historical candles")
+                return None, None
+                
             logger.debug(f"Checking CRT signal at {c3['time']}")
             logger.debug(f"Candle1 (t-2): time={c1['time']}, low={c1['low']}, high={c1['high']}")
-            logger.debug(f"Candle2 (t-1): time={c2['time']}, low={c2['low']}, high={c2['high']}, close={c2['close']}")
+            logger.debug(f"Candle2 (t-1): time={c2['time']}, low={c2['low']}, high={c2['high']}, close={c2['close']}, open={c2['open']}")
             logger.debug(f"Candle3 (current): time={c3['time']}, open={c3['open']}")
 
             c1_low = c1['low']
@@ -257,21 +283,32 @@ class FeatureEngineer:
             buy_condition = (
                 (c2_low < c1_low) and 
                 (c2_close > c1_low) and 
-                (c3_open > c2_mid)
-            )
-
+                (c3_open > c2_mid) and
+                (c2_close > c2['open'])  # Bullish candle
+                
             sell_condition = (
                 (c2_high > c1_high) and 
                 (c2_close < c1_high) and 
-                (c3_open < c2_mid)
-            )
-            
+                (c3_open < c2_mid) and
+                (c2_close < c2['open'])  # Bearish candle
+                
             logger.debug(f"Buy conditions: {buy_condition}, Sell conditions: {sell_condition}")
+            
+            # Volume confirmation
+            if buy_condition or sell_condition:
+                current_time = c3['time']
+                same_period_volumes = self.get_same_period_candles(df, current_time)
+                
+                if same_period_volumes:
+                    avg_volume = np.mean(same_period_volumes)
+                    if c2['volume'] < 0.8 * avg_volume:
+                        logger.debug("Signal rejected: low volume")
+                        return None, None
             
             if buy_condition:
                 signal_type = 'BUY'
                 entry = c3_open
-                sl = c2_low
+                sl = min(c2_low, c1_low)  # Conservative SL
                 risk = abs(entry - sl)
                 tp = entry + 4 * risk
                 logger.info(f"🔥 CRT BUY signal detected at {c3['time']}")
@@ -279,7 +316,7 @@ class FeatureEngineer:
             elif sell_condition:
                 signal_type = 'SELL'
                 entry = c3_open
-                sl = c2_high
+                sl = max(c2_high, c1_high)  # Conservative SL
                 risk = abs(sl - entry)
                 tp = entry - 4 * risk
                 logger.info(f"🔥 CRT SELL signal detected at {c3['time']}")
@@ -299,24 +336,32 @@ class FeatureEngineer:
     def calculate_technical_indicators(self, df):
         df = df.copy().drop_duplicates(subset=['time'], keep='last')
         
+        # Handle incomplete current candle
         if not df.empty and not df.iloc[-1]['complete']:
-            current_candle = df.iloc[-1]
+            current_candle = df.iloc[-1].copy()
+            prev_candle = df.iloc[-2] if len(df) > 1 else current_candle
+            
+            # Estimate volume based on historical average
             current_time = current_candle['time']
             same_period_volumes = self.get_same_period_candles(df, current_time)
             
-            if len(same_period_volumes) > 0:
+            if same_period_volumes:
                 avg_volume = np.mean(same_period_volumes)
-                current_volume = current_candle['volume']
-                volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
-                volume_ratio = min(3.0, max(0.1, volume_ratio))
-                estimated_volume = avg_volume * volume_ratio
-                df.at[df.index[-1], 'volume'] = estimated_volume
+                volume_ratio = min(3.0, max(0.1, current_candle['volume'] / avg_volume))
+                current_candle['volume'] = avg_volume * volume_ratio
+            
+            # Estimate OHLC using previous candle's close as base
+            current_candle['open'] = prev_candle['close']
+            current_candle['high'] = max(current_candle['high'], prev_candle['close'])
+            current_candle['low'] = min(current_candle['low'], prev_candle['close'])
+            current_candle['close'] = prev_candle['close']  # Temporary estimate
+            
+            df.iloc[-1] = current_candle
         
         df['adj close'] = df['open']
-                # FIXED: Syntax error in garman_klass_vol calculation
         df['garman_klass_vol'] = (
-            (np.log(df['high']) - np.log(df['low'])) ** 2 / 2
-            - (2 * np.log(2) - 1) * (np.log(df['adj close']) - np.log(df['open'])) ** 2
+            ((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -
+            (2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2
         )
         
         df['rsi_20'] = ta.rsi(df['adj close'], length=20)
@@ -449,9 +494,34 @@ class FeatureEngineer:
 
     def generate_features(self, df, signal_type, minutes_closed):
         if len(df) < 200:
+            logger.warning("Not enough data for feature generation")
             return None
         
-        df = df.tail(200).copy()
+        # Create a copy and ensure we only use complete candles
+        df = df[df['complete']].tail(200).copy()
+        
+        # Handle incomplete current candle
+        if not df.empty and not df.iloc[-1]['complete']:
+            current_candle = df.iloc[-1].copy()
+            prev_candle = df.iloc[-2]
+            
+            # Estimate volume based on historical average
+            current_time = current_candle['time']
+            same_period_volumes = self.get_same_period_candles(df, current_time)
+            
+            if same_period_volumes:
+                avg_volume = np.mean(same_period_volumes)
+                volume_ratio = min(3.0, max(0.1, current_candle['volume'] / avg_volume))
+                current_candle['volume'] = avg_volume * volume_ratio
+            
+            # Estimate OHLC using previous candle's close as base
+            current_candle['open'] = prev_candle['close']
+            current_candle['high'] = max(current_candle['high'], prev_candle['close'])
+            current_candle['low'] = min(current_candle['low'], prev_candle['close'])
+            current_candle['close'] = prev_candle['close']  # Temporary estimate
+            
+            df.iloc[-1] = current_candle
+
         df = self.calculate_technical_indicators(df)
         df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
         df = self.calculate_categorical_features(df)
@@ -509,8 +579,8 @@ class FeatureEngineer:
                     features[feat] = prev_candle[feat]
         
         if features.isna().any():
-            for col in features[features.isna()].index:
-                features[col] = 0
+            logger.warning("NaN values in features, replacing with 0")
+            features.fillna(0, inplace=True)
         
         return features
 
@@ -561,6 +631,7 @@ class RealTimeDetector:
                 time.sleep(self.detector.poll_interval)
                 
             except Exception as e:
+                logger.error(f"Real-time detector error: {str(e)}")
                 time.sleep(self.detector.poll_interval)
 
     def stop(self):
@@ -589,6 +660,7 @@ class TradingDetector:
         self.scan_count = 0
         self.signal_found = False
         self.next_candle_time = None
+        self.last_signal_time = None
         
         self.data = self.fetch_initial_candles()
         if self.data.empty or len(self.data) < 200:
@@ -635,24 +707,32 @@ class TradingDetector:
         
         with self.lock:
             if self.data.empty:
-                self.data = df_new.dropna(subset=['time', 'open', 'high', 'low', 'close']).tail(self.candle_count)
-            else:
-                last_existing_time = self.data['time'].max()
-                new_data = df_new[df_new['time'] > last_existing_time]
-                same_time_data = df_new[df_new['time'] == last_existing_time]
+                self.data = df_new
+                return
                 
-                if not same_time_data.empty:
-                    self.data = self.data[self.data['time'] < last_existing_time]
-                    self.data = pd.concat([self.data, same_time_data])
-                
-                if not new_data.empty:
-                    self.data = pd.concat([self.data, new_data])
-                
-                self.data = self.data.sort_values('time').reset_index(drop=True).tail(self.candle_count)
+            # Get the last complete candle from existing data
+            last_complete = self.data[self.data['complete']].iloc[-1] if not self.data.empty else None
+            
+            # Merge new data
+            for _, new_row in df_new.iterrows():
+                # Update existing incomplete candle
+                if not new_row['complete'] and not self.data.empty:
+                    current_idx = self.data.index[-1]
+                    if not self.data.loc[current_idx, 'complete']:
+                        self.data.loc[current_idx] = new_row
+                        continue
+                        
+                # Add new candle if it doesn't exist
+                if new_row['time'] > self.data['time'].max():
+                    self.data = pd.concat([self.data, pd.DataFrame([new_row])], ignore_index=True)
+                    
+            # Keep only the most recent 201 candles
+            self.data = self.data.tail(201)
 
     def predict_single_model(self, features_df):
         expected_features = len(self.feature_engineer.features)
         if features_df.shape[1] != expected_features:
+            logger.error(f"Feature mismatch: expected {expected_features}, got {features_df.shape[1]}")
             return None, None
         
         try:
@@ -664,6 +744,7 @@ class TradingDetector:
             outcome = "Worth Taking" if final_pred == 1 else "Likely Loss"
             return prob, outcome
         except Exception as e:
+            logger.error(f"Prediction error: {str(e)}")
             return None, None
 
     def process_signals(self, minutes_closed, latest_candles):
@@ -671,16 +752,24 @@ class TradingDetector:
             self.update_data(latest_candles)
 
         if self.data.empty or len(self.data) < 3:
+            logger.warning("Not enough data for signal processing")
             return
 
         with self.lock:
             latest_candle_time = self.data.iloc[-1]['time']
             current_time = datetime.now(NY_TZ)
+            
+            # Deduplication check
+            if self.last_signal_time and (current_time - self.last_signal_time).total_seconds() < 60:
+                logger.debug("Skipping signal processing: too recent")
+                return
+                
             candle_age = self.calculate_candle_age(current_time, latest_candle_time)
             self.next_candle_time = self._get_next_candle_time(latest_candle_time)
 
             signal_type, signal_data = self.feature_engineer.calculate_crt_signal(self.data)
             if signal_type and signal_data:
+                self.last_signal_time = current_time
                 current_candle = self.data.iloc[-1]
                 
                 is_new_trade = True
@@ -700,36 +789,53 @@ class TradingDetector:
                         f"SL: {signal_data['sl']:.5f}"
                     )
                     if send_telegram(setup_msg):
-                        features = self.feature_engineer.generate_features(self.data, signal_type, minutes_closed)
-                        if features is not None:
-                            feature_msg = f"📊 *{self.timeframe} FEATURES* {INSTRUMENT.replace('_','/')} {signal_type}\n"
-                            formatted_features = []
-                            for feat, val in features.items():
-                                escaped_feat = feat.replace('_', '\\_')
-                                formatted_features.append(f"{escaped_feat}: {val:.6f}")
-                            feature_msg += "\n".join(formatted_features)
-                            send_telegram(feature_msg)
+                        logger.info("Sent Telegram setup notification")
+                    else:
+                        logger.error("Failed to send Telegram setup notification")
+                    
+                    features = self.feature_engineer.generate_features(self.data, signal_type, minutes_closed)
+                    if features is not None:
+                        feature_msg = f"📊 *{self.timeframe} FEATURES* {INSTRUMENT.replace('_','/')} {signal_type}\n"
+                        formatted_features = []
+                        for feat, val in features.items():
+                            # Skip long lists of features for Telegram
+                            if 'minutes,closed' not in feat:
+                                formatted_features.append(f"{feat}: {val:.6f}")
+                        feature_msg += "\n".join(formatted_features[:15])  # Only show first 15 features
+                        if send_telegram(feature_msg):
+                            logger.info("Sent Telegram features notification")
+                        else:
+                            logger.error("Failed to send Telegram features notification")
+                    else:
+                        logger.warning("Feature generation failed")
 
-                        if self.scaler is not None and self.model is not None:
-                            features_df = pd.DataFrame([features], columns=self.feature_engineer.features)
-                            prob, outcome = self.predict_single_model(features_df)
+                    if self.scaler is not None and self.model is not None:
+                        features_df = pd.DataFrame([features], columns=self.feature_engineer.features)
+                        prob, outcome = self.predict_single_model(features_df)
+                        
+                        if prob is not None:
+                            pred_msg = f"🤖 *{self.timeframe} MODEL PREDICTION*\n"
+                            pred_msg += f"Probability: {prob:.6f}\n"
+                            pred_msg += f"Decision: {outcome}"
+                            if send_telegram(pred_msg):
+                                logger.info("Sent Telegram prediction notification")
+                            else:
+                                logger.error("Failed to send Telegram prediction notification")
                             
-                            if prob is not None:
-                                pred_msg = f"🤖 *{self.timeframe} MODEL PREDICTION*\n"
-                                pred_msg += f"Probability: {prob:.6f}\n"
-                                pred_msg += f"Decision: {outcome}"
-                                send_telegram(pred_msg)
-                                
-                                trade_id = f"{self.timeframe}_{signal_type}_{current_time.timestamp()}"
-                                self.detector.bot.active_trades[trade_id] = {
-                                    'entry': signal_data['entry'],
-                                    'sl': signal_data['sl'],
-                                    'tp': signal_data['tp'],
-                                    'time': current_time,
-                                    'signal_time': signal_data['time'],
-                                    'prediction': prob,
-                                    'outcome': None
-                                }
+                            trade_id = f"{self.timeframe}_{signal_type}_{current_time.timestamp()}"
+                            self.detector.bot.active_trades[trade_id] = {
+                                'entry': signal_data['entry'],
+                                'sl': signal_data['sl'],
+                                'tp': signal_data['tp'],
+                                'time': current_time,
+                                'signal_time': signal_data['time'],
+                                'prediction': prob,
+                                'outcome': None
+                            }
+                        else:
+                            logger.warning("Model prediction failed")
+                else:
+                    logger.info("Duplicate trade detected, skipping")
 
         # Trade outcome checking
         if len(self.data) > 0 and minutes_closed == self.candle_duration:
@@ -760,7 +866,10 @@ class TradingDetector:
                                 f"Prediction: {trade['prediction']:.6f}\n"
                                 f"Outcome: {trade['outcome']}"
                             )
-                            send_telegram(outcome_msg)
+                            if send_telegram(outcome_msg):
+                                logger.info("Sent Telegram outcome notification")
+                            else:
+                                logger.error("Failed to send Telegram outcome notification")
                             del self.detector.bot.active_trades[trade_id]
 
 # ========================
@@ -818,6 +927,7 @@ class CandleScheduler(threading.Thread):
                 time.sleep(max(1, sleep_seconds))
                 
             except Exception as e:
+                logger.error(f"Candle scheduler error: {str(e)}")
                 time.sleep(60)
 
 # ========================
@@ -894,9 +1004,13 @@ class TradingBot:
                     with self.lock:
                         self.detector.update_data(df)
                 time.sleep(self.poll_interval)
+            except V20Error as e:
+                logger.error(f"Oanda API error in main loop: {str(e)}")
+                time.sleep(30)
             except Exception as e:
-                logger.error(f"{self.timeframe} main loop error: {e}")
-                time.sleep(self.poll_interval)
+                logger.error(f"Unexpected error in main loop: {traceback.format_exc()}")
+                send_telegram(f"⚠️ *{self.timeframe} Bot Error*:\n```\n{traceback.format_exc()}\n```")
+                time.sleep(60)
 
     def stop(self):
         self.running = False
@@ -911,19 +1025,27 @@ class TradingBot:
 # ========================
 def main():
     # Enable debug logging for troubleshooting
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     
     logger.info("Launching trading bots")
+    send_telegram("🚀 *Launching Trading Bots*")
     
     # Create bot instances
     m5_bot = TradingBot("M5")
     m15_bot = TradingBot("M15")
     
     # Initialize bots
+    bots_initialized = True
     if not m5_bot.initialize():
         logger.error("Failed to initialize M5 bot")
+        bots_initialized = False
     if not m15_bot.initialize():
         logger.error("Failed to initialize M15 bot")
+        bots_initialized = False
+    
+    if not bots_initialized:
+        send_telegram("❌ Bot initialization failed, check logs")
+        return
     
     # Start bots in separate threads
     m5_thread = threading.Thread(target=m5_bot.run)
@@ -936,6 +1058,7 @@ def main():
     m15_bot.thread = m15_thread
     
     logger.info("Both bots started")
+    send_telegram("✅ Both bots started successfully")
     
     # Monitor threads
     try:
@@ -948,8 +1071,10 @@ def main():
                     m5_thread = threading.Thread(target=m5_bot.run)
                     m5_thread.start()
                     m5_bot.thread = m5_thread
+                    send_telegram("🔄 M5 Bot Restarted")
                 else:
                     logger.error("Failed to restart M5 bot")
+                    send_telegram("❌ Failed to restart M5 bot")
             
             if not m15_thread.is_alive():
                 logger.warning("M15 thread died, restarting...")
@@ -959,8 +1084,10 @@ def main():
                     m15_thread = threading.Thread(target=m15_bot.run)
                     m15_thread.start()
                     m15_bot.thread = m15_thread
+                    send_telegram("🔄 M15 Bot Restarted")
                 else:
                     logger.error("Failed to restart M15 bot")
+                    send_telegram("❌ Failed to restart M15 bot")
             
             time.sleep(10)
     except KeyboardInterrupt:
