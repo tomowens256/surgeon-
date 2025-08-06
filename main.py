@@ -313,9 +313,10 @@ class FeatureEngineer:
                 df.at[df.index[-1], 'volume'] = estimated_volume
         
         df['adj close'] = df['open']
+                # FIXED: Syntax error in garman_klass_vol calculation
         df['garman_klass_vol'] = (
-            ((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -
-            (2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2
+            (np.log(df['high']) - np.log(df['low'])) ** 2 / 2
+            - (2 * np.log(2) - 1) * (np.log(df['adj close']) - np.log(df['open'])) ** 2
         )
         
         df['rsi_20'] = ta.rsi(df['adj close'], length=20)
