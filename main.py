@@ -250,26 +250,34 @@ class FeatureEngineer:
         return same_period
 
     def calculate_crt_signal(self, df):
-        """Robust CRT signal calculation with improved logic"""
+        """Robust CRT signal calculation with validation"""
+        logger.info("CRT signal calculation with validation")
+        
+        # Ensure we have at least 3 candles
         if len(df) < 3:
+            logger.warning(f"Insufficient data: {len(df)} rows, need at least 3")
             return None, None
             
-        try:
-            # Get the last three candles: c1 is the oldest, c3 is the newest
-            c1 = df.iloc[-3]
-            c2 = df.iloc[-2]
-            c3 = df.iloc[-1]
+        # Create working copy with explicit index reset
+        crt_df = df.tail(3).copy().reset_index(drop=True)
+        
+        # Verify we have exactly 3 candles
+        if len(crt_df) < 3:
+            logger.warning(f"Only {len(crt_df)} rows after slicing, need 3")
+            return None, None
             
-            # Skip if historical candles are incomplete
-            if not c1['complete'] or not c2['complete']:
-                logger.debug("Skipping incomplete historical candles")
-                return None, None
-                
-            logger.debug(f"Checking CRT signal at {c3['time']}")
-            logger.debug(f"Candle1 (t-2): time={c1['time']}, low={c1['low']}, high={c1['high']}")
-            logger.debug(f"Candle2 (t-1): time={c2['time']}, low={c2['low']}, high={c2['high']}, close={c2['close']}, open={c2['open']}")
-            logger.debug(f"Candle3 (current): time={c3['time']}, open={c3['open']}")
-
+        # Verify chronological order
+        if not crt_df['time'].is_monotonic_increasing:
+            logger.error("Candles not in chronological order! Re-sorting...")
+            crt_df = crt_df.sort_values('time').reset_index(drop=True)
+        
+        try:
+            # CORRECTED CANDLE REFERENCES:
+            c1 = crt_df.iloc[0]  # Reference candle (two candles back)
+            c2 = crt_df.iloc[1]  # Breakout candle (previous candle)
+            c3 = crt_df.iloc[2]  # Current candle
+            
+            # Extract prices
             c1_low = c1['low']
             c1_high = c1['high']
             c2_low = c2['low']
@@ -277,25 +285,22 @@ class FeatureEngineer:
             c2_close = c2['close']
             c3_open = c3['open']
             
+            # Calculate candle metrics
             c2_range = c2_high - c2_low
             c2_mid = c2_low + (0.5 * c2_range)
 
-            # Fixed syntax error here - removed extra parentheses
+            # Vectorized conditions with explicit validation
             buy_condition = (
                 (c2_low < c1_low) and 
                 (c2_close > c1_low) and 
-                (c3_open > c2_mid) and
-                (c2_close > c2['open'])  # Bullish candle
+                (c3_open > c2_mid)
             )
-            
+
             sell_condition = (
                 (c2_high > c1_high) and 
                 (c2_close < c1_high) and 
-                (c3_open < c2_mid) and
-                (c2_close < c2['open'])  # Bearish candle
+                (c3_open < c2_mid)
             )
-            
-            logger.debug(f"Buy conditions: {buy_condition}, Sell conditions: {sell_condition}")
             
             # Volume confirmation
             if buy_condition or sell_condition:
@@ -305,36 +310,66 @@ class FeatureEngineer:
                 if same_period_volumes:
                     avg_volume = np.mean(same_period_volumes)
                     if c2['volume'] < 0.8 * avg_volume:
-                        logger.debug("Signal rejected: low volume")
+                        logger.info("Signal rejected due to low volume")
                         return None, None
             
+            # Extract signal for current candle
             if buy_condition:
+                # Log detailed validation
+                logger.info(f"✅ BUY VALIDATION| "
+                            f"C2_Low:{c2_low:.5f} < C1_Low:{c1_low:.5f}| "
+                            f"C2_Close:{c2_close:.5f} > C1_Low:{c1_low:.5f}| "
+                            f"C3_Open:{c3_open:.5f} > C2_Mid:{c2_mid:.5f}")
+                
                 signal_type = 'BUY'
                 entry = c3_open
-                sl = min(c2_low, c1_low)  # Conservative SL
+                sl = min(c2_low, c1_low)   # Conservative SL (lowest of c1 and c2)
                 risk = abs(entry - sl)
                 tp = entry + 4 * risk
-                logger.info(f"🔥 CRT BUY signal detected at {c3['time']}")
-                return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': c3['time']}
+                logger.info(f"BUY signal validated")
+                
             elif sell_condition:
+                # Log detailed validation
+                logger.info(f"✅ SELL VALIDATION| "
+                            f"C2_High:{c2_high:.5f} > C1_High:{c1_high:.5f}| "
+                            f"C2_Close:{c2_close:.5f} < C1_High:{c1_high:.5f}| "
+                            f"C3_Open:{c3_open:.5f} < C2_Mid:{c2_mid:.5f}")
+                
                 signal_type = 'SELL'
                 entry = c3_open
-                sl = max(c2_high, c1_high)  # Conservative SL
+                sl = max(c2_high, c1_high)   # Conservative SL (highest of c1 and c2)
                 risk = abs(sl - entry)
                 tp = entry - 4 * risk
-                logger.info(f"🔥 CRT SELL signal detected at {c3['time']}")
-                return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': c3['time']}
-            else:
-                logger.debug("No CRT signal detected")
-                return None, None
+                logger.info(f"SELL signal validated")
                 
+            else:
+                # Log why no signal was detected
+                logger.info("❌ No signal detected:")
+                if not (c2_low < c1_low):
+                    logger.info(f"  - C2_Low:{c2_low:.5f} >= C1_Low:{c1_low:.5f}")
+                if not (c2_close > c1_low):
+                    logger.info(f"  - C2_Close:{c2_close:.5f} <= C1_Low:{c1_low:.5f}")
+                if not (c3_open > c2_mid):
+                    logger.info(f"  - C3_Open:{c3_open:.5f} <= C2_Mid:{c2_mid:.5f}")
+                if not (c2_high > c1_high):
+                    logger.info(f"  - C2_High:{c2_high:.5f} <= C1_High:{c1_high:.5f}")
+                if not (c2_close < c1_high):
+                    logger.info(f"  - C2_Close:{c2_close:.5f} >= C1_High:{c1_high:.5f}")
+                if not (c3_open < c2_mid):
+                    logger.info(f"  - C3_Open:{c3_open:.5f} >= C2_Mid:{c2_mid:.5f}")
+                    
+                return None, None
+            
+            logger.info(f"Detected signal: {signal_type} at {c3['time']}")
+            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': c3['time']}
+            
         except KeyError as e:
-            logger.error(f"KeyError in CRT calculation: {str(e)}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Missing price data in candle: {str(e)}")
+            return None, None
         except Exception as e:
             logger.error(f"Unexpected error in CRT calculation: {str(e)}")
             logger.error(traceback.format_exc())
-        return None, None
+            return None, None
 
     def calculate_technical_indicators(self, df):
         df = df.copy().drop_duplicates(subset=['time'], keep='last')
@@ -360,12 +395,11 @@ class FeatureEngineer:
             current_candle['close'] = prev_candle['close']  # Temporary estimate
             
             df.iloc[-1] = current_candle
-        
+
         df['adj close'] = df['open']
-                # FIXED: Syntax error in garman_klass_vol calculation
         df['garman_klass_vol'] = (
-            (np.log(df['high']) - np.log(df['low'])) ** 2 / 2
-            - (2 * np.log(2) - 1) * (np.log(df['adj close']) - np.log(df['open'])) ** 2
+            ((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -
+            (2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2
         )
         
         df['rsi_20'] = ta.rsi(df['adj close'], length=20)
@@ -497,96 +531,98 @@ class FeatureEngineer:
         return df
 
     def generate_features(self, df, signal_type, minutes_closed):
+        """Robust feature generation with validation"""
         if len(df) < 200:
             logger.warning("Not enough data for feature generation")
             return None
         
-        # Create a copy and ensure we only use complete candles
-        df = df[df['complete']].tail(200).copy()
-        
-        # Handle incomplete current candle
-        if not df.empty and not df.iloc[-1]['complete']:
-            current_candle = df.iloc[-1].copy()
-            prev_candle = df.iloc[-2]
-            
-            # Estimate volume based on historical average
-            current_time = current_candle['time']
-            same_period_volumes = self.get_same_period_candles(df, current_time)
-            
-            if same_period_volumes:
-                avg_volume = np.mean(same_period_volumes)
-                volume_ratio = min(3.0, max(0.1, current_candle['volume'] / avg_volume))
-                current_candle['volume'] = avg_volume * volume_ratio
-            
-            # Estimate OHLC using previous candle's close as base
-            current_candle['open'] = prev_candle['close']
-            current_candle['high'] = max(current_candle['high'], prev_candle['close'])
-            current_candle['low'] = min(current_candle['low'], prev_candle['close'])
-            current_candle['close'] = prev_candle['close']  # Temporary estimate
-            
-            df.iloc[-1] = current_candle
+        try:
+            # Create a working copy and handle incomplete candles
+            df = df[df['complete']].tail(200).copy()
+            if not df.empty and not df.iloc[-1]['complete']:
+                current_candle = df.iloc[-1].copy()
+                prev_candle = df.iloc[-2]
+                
+                # Estimate volume based on historical average
+                current_time = current_candle['time']
+                same_period_volumes = self.get_same_period_candles(df, current_time)
+                if same_period_volumes:
+                    avg_volume = np.mean(same_period_volumes)
+                    volume_ratio = min(3.0, max(0.1, current_candle['volume'] / avg_volume))
+                    current_candle['volume'] = avg_volume * volume_ratio
+                
+                # Estimate OHLC using previous candle's close
+                current_candle['open'] = prev_candle['close']
+                current_candle['high'] = max(current_candle['high'], prev_candle['close'])
+                current_candle['low'] = min(current_candle['low'], prev_candle['close'])
+                current_candle['close'] = prev_candle['close']
+                df.iloc[-1] = current_candle
 
-        df = self.calculate_technical_indicators(df)
-        df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
-        df = self.calculate_categorical_features(df)
-        df = self.calculate_minutes_closed(df, minutes_closed)
-        
-        df['prev_volume'] = df['volume'].shift(1)
-        df['body_size'] = abs(df['close'] - df['open'])
-        df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
-        df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
-        df['prev_body_size'] = df['body_size'].shift(1)
-        df['prev_wick_up'] = df['wick_up'].shift(1)
-        df['prev_wick_down'] = df['wick_down'].shift(1)
-        
-        df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
-        df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
-        df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
-        df['sl_div_atr'] = df['sl_distance'] / (df['atr_z'] + 1e-6)
-        df['tp_div_atr'] = df['tp_distance'] / (df['atr_z'] + 1e-6)
-        df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
-        
-        combo_flags = {'combo_flag_dead': 0, 'combo_flag_fair': 0, 'combo_flag_fine': 0}
-        combo_flags2 = {'combo_flag2_dead': 0, 'combo_flag2_fair': 0, 'combo_flag2_fine': 0}
-        if df['rsi'].iloc[-1] < 30 or df['macd_z'].iloc[-1] < -1:
-            combo_flags['combo_flag_dead'] = 1
-            combo_flags2['combo_flag2_dead'] = 1
-        elif df['rsi'].iloc[-1] > 70 or df['macd_z'].iloc[-1] > 1:
-            combo_flags['combo_flag_fine'] = 1
-            combo_flags2['combo_flag2_fine'] = 1
-        else:
-            combo_flags['combo_flag_fair'] = 1
-            combo_flags2['combo_flag2_fair'] = 1
-        for flag, value in combo_flags.items():
-            df[flag] = value
-        for flag, value in combo_flags2.items():
-            df[flag] = value
-        
-        df['is_bad_combo'] = 1 if combo_flags['combo_flag_dead'] == 1 else 0
-        
-        df['crt_BUY'] = int(signal_type == 'BUY')
-        df['crt_SELL'] = int(signal_type == 'SELL')
-        df['trade_type_BUY'] = int(signal_type == 'BUY')
-        df['trade_type_SELL'] = int(signal_type == 'SELL')
-        
-        features = pd.Series(index=self.features, dtype=float)
-        for feat in self.features:
-            if feat in df.columns:
-                features[feat] = df[feat].iloc[-1]
-            else:
-                features[feat] = 0
-        
-        if len(df) >= 2:
-            prev_candle = df.iloc[-2]
-            for feat in self.shift_features:
-                if feat in features.index and feat in prev_candle:
-                    features[feat] = prev_candle[feat]
-        
-        if features.isna().any():
-            logger.warning("NaN values in features, replacing with 0")
-            features.fillna(0, inplace=True)
-        
-        return features
+            # Calculate all technical indicators
+            df = self.calculate_technical_indicators(df)
+            df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
+            df = self.calculate_categorical_features(df)
+            df = self.calculate_minutes_closed(df, minutes_closed)
+            
+            # Add derived features
+            df['prev_volume'] = df['volume'].shift(1)
+            df['body_size'] = abs(df['close'] - df['open'])
+            df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
+            df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
+            df['prev_body_size'] = df['body_size'].shift(1)
+            df['prev_wick_up'] = df['wick_up'].shift(1)
+            df['prev_wick_down'] = df['wick_down'].shift(1)
+            
+            # Add ratio-based features
+            df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
+            df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
+            df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
+            df['sl_div_atr'] = df['sl_distance'] / (df['atr_z'] + 1e-6)
+            df['tp_div_atr'] = df['tp_distance'] / (df['atr_z'] + 1e-6)
+            df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
+            
+            # Add combo flags based on indicators
+            rsi_val = df['rsi'].iloc[-1]
+            macd_val = df['macd_z'].iloc[-1]
+            combo_flags = {
+                'combo_flag_dead': 1 if rsi_val < 30 or macd_val < -1 else 0,
+                'combo_flag_fair': 1 if 30 <= rsi_val <= 70 and -1 <= macd_val <= 1 else 0,
+                'combo_flag_fine': 1 if rsi_val > 70 or macd_val > 1 else 0
+            }
+            for flag, value in combo_flags.items():
+                df[flag] = value
+                
+            # Add signal type flags
+            df['crt_BUY'] = int(signal_type == 'BUY')
+            df['crt_SELL'] = int(signal_type == 'SELL')
+            df['trade_type_BUY'] = int(signal_type == 'BUY')
+            df['trade_type_SELL'] = int(signal_type == 'SELL')
+            
+            # Create feature vector
+            features = pd.Series(index=self.features, dtype=float).fillna(0)
+            for feat in self.features:
+                if feat in df.columns:
+                    features[feat] = df[feat].iloc[-1]
+                    
+            # Use previous candle values for shifted features
+            if len(df) >= 2:
+                prev_candle = df.iloc[-2]
+                for feat in self.shift_features:
+                    if feat in prev_candle:
+                        features[feat] = prev_candle[feat]
+                        
+            # Final validation and cleaning
+            if features.isna().any():
+                logger.warning(f"NaN values in features: {features[features.isna()].index.tolist()}")
+                features = features.fillna(0)
+                
+            logger.info(f"Generated {len(features)} features for {signal_type} signal")
+            return features
+            
+        except Exception as e:
+            logger.error(f"Feature generation failed: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
 
 # ========================
 # REAL-TIME DETECTOR
@@ -752,6 +788,7 @@ class TradingDetector:
             return None, None
 
     def process_signals(self, minutes_closed, latest_candles):
+        """Robust signal processing with model prediction"""
         if not latest_candles.empty:
             self.update_data(latest_candles)
 
@@ -759,122 +796,117 @@ class TradingDetector:
             logger.warning("Not enough data for signal processing")
             return
 
-        with self.lock:
-            latest_candle_time = self.data.iloc[-1]['time']
-            current_time = datetime.now(NY_TZ)
-            
-            # Deduplication check
-            if self.last_signal_time and (current_time - self.last_signal_time).total_seconds() < 60:
-                logger.debug("Skipping signal processing: too recent")
-                return
-                
-            candle_age = self.calculate_candle_age(current_time, latest_candle_time)
-            self.next_candle_time = self._get_next_candle_time(latest_candle_time)
-
-            signal_type, signal_data = self.feature_engineer.calculate_crt_signal(self.data)
-            if signal_type and signal_data:
-                self.last_signal_time = current_time
-                current_candle = self.data.iloc[-1]
-                
+        try:
+            with self.lock:
+                # Signal deduplication
+                current_time = datetime.now(NY_TZ)
+                if self.last_signal_time and (current_time - self.last_signal_time).total_seconds() < 60:
+                    logger.debug("Skipping signal processing: too recent")
+                    return
+                    
+                # Detect CRT signal
+                signal_type, signal_data = self.feature_engineer.calculate_crt_signal(self.data)
+                if not signal_type or not signal_data:
+                    return
+                    
+                # Check for duplicate trades
                 is_new_trade = True
-                for trade_id, trade in list(self.detector.bot.active_trades.items()):
-                    if trade['sl'] == signal_data['sl'] and trade.get('outcome') is None:
+                for trade in self.bot.active_trades.values():
+                    if (abs(trade['entry'] - signal_data['entry']) < 0.0001 and
+                        abs(trade['sl'] - signal_data['sl']) < 0.0001):
                         is_new_trade = False
                         break
-                
-                if is_new_trade:
-                    self.signal_found = True
-                    alert_time = signal_data['time'].astimezone(NY_TZ)
-                    setup_msg = (
-                        f"🔔 *{self.timeframe} SETUP* {INSTRUMENT.replace('_','/')} {signal_type}\n"
-                        f"Time: {alert_time.strftime('%Y-%m-%d %H:%M')} NY\n"
-                        f"Entry: {signal_data['entry']:.5f}\n"
-                        f"TP: {signal_data['tp']:.5f}\n"
-                        f"SL: {signal_data['sl']:.5f}"
-                    )
-                    if send_telegram(setup_msg):
-                        logger.info("Sent Telegram setup notification")
-                    else:
-                        logger.error("Failed to send Telegram setup notification")
-                    
-                    features = self.feature_engineer.generate_features(self.data, signal_type, minutes_closed)
-                    if features is not None:
-                        feature_msg = f"📊 *{self.timeframe} FEATURES* {INSTRUMENT.replace('_','/')} {signal_type}\n"
-                        formatted_features = []
-                        for feat, val in features.items():
-                            # Skip long lists of features for Telegram
-                            if 'minutes,closed' not in feat:
-                                formatted_features.append(f"{feat}: {val:.6f}")
-                        feature_msg += "\n".join(formatted_features[:15])  # Only show first 15 features
-                        if send_telegram(feature_msg):
-                            logger.info("Sent Telegram features notification")
-                        else:
-                            logger.error("Failed to send Telegram features notification")
-                    else:
-                        logger.warning("Feature generation failed")
-
-                    if self.scaler is not None and self.model is not None:
-                        features_df = pd.DataFrame([features], columns=self.feature_engineer.features)
-                        prob, outcome = self.predict_single_model(features_df)
                         
-                        if prob is not None:
-                            pred_msg = f"🤖 *{self.timeframe} MODEL PREDICTION*\n"
-                            pred_msg += f"Probability: {prob:.6f}\n"
-                            pred_msg += f"Decision: {outcome}"
-                            if send_telegram(pred_msg):
-                                logger.info("Sent Telegram prediction notification")
-                            else:
-                                logger.error("Failed to send Telegram prediction notification")
-                            
-                            trade_id = f"{self.timeframe}_{signal_type}_{current_time.timestamp()}"
-                            self.detector.bot.active_trades[trade_id] = {
-                                'entry': signal_data['entry'],
-                                'sl': signal_data['sl'],
-                                'tp': signal_data['tp'],
-                                'time': current_time,
-                                'signal_time': signal_data['time'],
-                                'prediction': prob,
-                                'outcome': None
-                            }
-                        else:
-                            logger.warning("Model prediction failed")
-                else:
+                if not is_new_trade:
                     logger.info("Duplicate trade detected, skipping")
+                    return
+                    
+                # Generate features
+                features = self.feature_engineer.generate_features(
+                    self.data, 
+                    signal_type, 
+                    minutes_closed
+                )
+                if features is None:
+                    logger.error("Feature generation failed, skipping prediction")
+                    return
+                    
+                # Prepare for model prediction
+                features_df = pd.DataFrame([features], columns=self.feature_engineer.features)
+                
+                # Get model prediction
+                prob, outcome = self.predict_single_model(features_df)
+                if prob is None:
+                    logger.error("Model prediction failed")
+                    return
+                
+                # Record trade
+                trade_id = f"{self.timeframe}_{signal_type}_{current_time.timestamp()}"
+                self.bot.active_trades[trade_id] = {
+                    'entry': signal_data['entry'],
+                    'sl': signal_data['sl'],
+                    'tp': signal_data['tp'],
+                    'time': current_time,
+                    'signal_time': signal_data['time'],
+                    'prediction': prob,
+                    'outcome': None
+                }
+                
+                # Send notifications
+                self.send_trade_notifications(signal_type, signal_data, features, prob, outcome)
+                
+                # Update tracking variables
+                self.last_signal_time = current_time
+                self.signal_found = True
+                
+        except Exception as e:
+            logger.error(f"Signal processing failed: {str(e)}")
+            logger.error(traceback.format_exc())
 
-        # Trade outcome checking
-        if len(self.data) > 0 and minutes_closed == self.candle_duration:
-            with self.lock:
-                latest_candle = self.data.iloc[-1]
-                for trade_id, trade in list(self.detector.bot.active_trades.items()):
-                    if trade.get('outcome') is None and trade_id.startswith(self.timeframe):
-                        entry, sl, tp = trade['entry'], trade['sl'], trade['tp']
-                        
-                        if entry > sl:  # SELL trade
-                            if latest_candle['high'] >= sl:
-                                trade['outcome'] = 'Hit SL (Loss)'
-                            elif latest_candle['low'] <= tp:
-                                trade['outcome'] = 'Hit TP (Win)'
-                        else:  # BUY trade
-                            if latest_candle['low'] <= sl:
-                                trade['outcome'] = 'Hit SL (Loss)'
-                            elif latest_candle['high'] >= tp:
-                                trade['outcome'] = 'Hit TP (Win)'
-                        
-                        if trade.get('outcome'):
-                            outcome_msg = (
-                                f"📈 *{self.timeframe} Trade Outcome*\n"
-                                f"Signal Time: {trade['signal_time'].strftime('%Y-%m-%d %H:%M')} NY\n"
-                                f"Entry: {entry:.5f}\n"
-                                f"SL: {sl:.5f}\n"
-                                f"TP: {tp:.5f}\n"
-                                f"Prediction: {trade['prediction']:.6f}\n"
-                                f"Outcome: {trade['outcome']}"
-                            )
-                            if send_telegram(outcome_msg):
-                                logger.info("Sent Telegram outcome notification")
-                            else:
-                                logger.error("Failed to send Telegram outcome notification")
-                            del self.detector.bot.active_trades[trade_id]
+    def send_trade_notifications(self, signal_type, signal_data, features, prediction, outcome):
+        """Send comprehensive trade notifications to Telegram"""
+        try:
+            # Send basic trade alert
+            alert_time = signal_data['time'].astimezone(NY_TZ)
+            setup_msg = (
+                f"🔔 *{self.timeframe} SETUP* {INSTRUMENT.replace('_','/')} {signal_type}\n"
+                f"Time: {alert_time.strftime('%Y-%m-%d %H:%M')} NY\n"
+                f"Entry: {signal_data['entry']:.5f}\n"
+                f"TP: {signal_data['tp']:.5f}\n"
+                f"SL: {signal_data['sl']:.5f}"
+            )
+            send_telegram(setup_msg)
+            
+            # Send feature summary
+            feature_msg = f"📊 *{self.timeframe} KEY FEATURES*\n"
+            important_features = [
+                'rsi', 'macd_z', 'atr_z', 'vwap', 'ma_20', 'ma_60', 
+                'bb_low', 'bb_high', 'rsi_zone', 'trend_strength_up',
+                'sl_distance', 'tp_distance', 'rrr'
+            ]
+            for feat in important_features:
+                if feat in features:
+                    feature_msg += f"{feat}: {features[feat]:.6f}\n"
+            send_telegram(feature_msg)
+            
+            # Send prediction
+            pred_msg = (
+                f"🤖 *{self.timeframe} MODEL PREDICTION*\n"
+                f"Probability: {prediction:.6f}\n"
+                f"Decision: {outcome}"
+            )
+            send_telegram(pred_msg)
+            
+        except Exception as e:
+            logger.error(f"Failed to send trade notifications: {str(e)}")
+
+    def calculate_minutes_closed(self, latest_time):
+        if latest_time is None:
+            return 0
+        now = datetime.now(NY_TZ)
+        elapsed = (now - latest_time).total_seconds() / 60
+        max_closed = 4.9 if self.candle_duration == 5 else 14.9
+        return min(max_closed, max(0, elapsed))
 
 # ========================
 # CANDLE SCHEDULER
@@ -901,14 +933,6 @@ class CandleScheduler(threading.Thread):
             return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
         return now.replace(minute=next_minute, second=0, microsecond=0)
     
-    def calculate_minutes_closed(self, latest_time):
-        if latest_time is None:
-            return 0
-        now = datetime.now(NY_TZ)
-        elapsed = (now - latest_time).total_seconds() / 60
-        max_closed = 4.9 if self.candle_duration == 5 else 14.9
-        return min(max_closed, max(0, elapsed))
-    
     def run(self):
         while self.active:
             try:
@@ -933,6 +957,14 @@ class CandleScheduler(threading.Thread):
             except Exception as e:
                 logger.error(f"Candle scheduler error: {str(e)}")
                 time.sleep(60)
+
+    def calculate_minutes_closed(self, latest_time):
+        if latest_time is None:
+            return 0
+        now = datetime.now(NY_TZ)
+        elapsed = (now - latest_time).total_seconds() / 60
+        max_closed = 4.9 if self.candle_duration == 5 else 14.9
+        return min(max_closed, max(0, elapsed))
 
 # ========================
 # TRADING BOT CLASS
