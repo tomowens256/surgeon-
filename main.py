@@ -229,23 +229,21 @@ class FeatureEngineer:
         return same_period
 
     def calculate_crt_signal(self, df):
-        """Robust CRT signal calculation"""
+        """Robust CRT signal calculation with improved logic"""
         if len(df) < 3:
             return None, None
             
-        crt_df = df.tail(3).copy().reset_index(drop=True)
-        
-        if len(crt_df) < 3:
-            return None, None
-            
-        if not crt_df['time'].is_monotonic_increasing:
-            crt_df = crt_df.sort_values('time').reset_index(drop=True)
-        
         try:
-            c1 = crt_df.iloc[0]
-            c2 = crt_df.iloc[1]
-            c3 = crt_df.iloc[2]
+            # Get the last three candles: c1 is the oldest, c3 is the newest
+            c1 = df.iloc[-3]
+            c2 = df.iloc[-2]
+            c3 = df.iloc[-1]
             
+            logger.debug(f"Checking CRT signal at {c3['time']}")
+            logger.debug(f"Candle1 (t-2): time={c1['time']}, low={c1['low']}, high={c1['high']}")
+            logger.debug(f"Candle2 (t-1): time={c2['time']}, low={c2['low']}, high={c2['high']}, close={c2['close']}")
+            logger.debug(f"Candle3 (current): time={c3['time']}, open={c3['open']}")
+
             c1_low = c1['low']
             c1_high = c1['high']
             c2_low = c2['low']
@@ -268,25 +266,35 @@ class FeatureEngineer:
                 (c3_open < c2_mid)
             )
             
+            logger.debug(f"Buy conditions: {buy_condition}, Sell conditions: {sell_condition}")
+            
             if buy_condition:
                 signal_type = 'BUY'
                 entry = c3_open
                 sl = c2_low
                 risk = abs(entry - sl)
                 tp = entry + 4 * risk
+                logger.info(f"🔥 CRT BUY signal detected at {c3['time']}")
+                return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': c3['time']}
             elif sell_condition:
                 signal_type = 'SELL'
                 entry = c3_open
                 sl = c2_high
                 risk = abs(sl - entry)
                 tp = entry - 4 * risk
+                logger.info(f"🔥 CRT SELL signal detected at {c3['time']}")
+                return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': c3['time']}
             else:
+                logger.debug("No CRT signal detected")
                 return None, None
-            
-            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': c3['time']}
-            
+                
         except KeyError as e:
-            return None, None
+            logger.error(f"KeyError in CRT calculation: {str(e)}")
+            logger.error(traceback.format_exc())
+        except Exception as e:
+            logger.error(f"Unexpected error in CRT calculation: {str(e)}")
+            logger.error(traceback.format_exc())
+        return None, None
 
     def calculate_technical_indicators(self, df):
         df = df.copy().drop_duplicates(subset=['time'], keep='last')
@@ -305,11 +313,9 @@ class FeatureEngineer:
                 df.at[df.index[-1], 'volume'] = estimated_volume
         
         df['adj close'] = df['open']
-        
-        # FIXED: Syntax error in garman_klass_vol calculation
         df['garman_klass_vol'] = (
-            (np.log(df['high']) - np.log(df['low'])) ** 2 / 2
-            - (2 * np.log(2) - 1) * (np.log(df['adj close']) - np.log(df['open'])) ** 2
+            ((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -
+            (2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2
         )
         
         df['rsi_20'] = ta.rsi(df['adj close'], length=20)
@@ -798,13 +804,12 @@ class CandleScheduler(threading.Thread):
                     time.sleep(60)
                     continue
                 
-                complete_candles = df_candles[df_candles['complete'] == True]
-                if not complete_candles.empty:
-                    latest_candle = complete_candles.iloc[-1]
-                    latest_time = latest_candle['time']
-                    minutes_closed = self.calculate_minutes_closed(latest_time)
-                    if self.callback:
-                        self.callback(minutes_closed, complete_candles.tail(1))
+                # Pass all candles including incomplete ones
+                latest_candle = df_candles.iloc[-1]
+                latest_time = latest_candle['time']
+                minutes_closed = self.calculate_minutes_closed(latest_time)
+                if self.callback:
+                    self.callback(minutes_closed, df_candles.tail(1))
                 
                 now = datetime.now(NY_TZ)
                 next_run = self.calculate_next_candle()
@@ -904,6 +909,9 @@ class TradingBot:
 # MAIN APPLICATION
 # ========================
 def main():
+    # Enable debug logging for troubleshooting
+    logger.setLevel(logging.DEBUG)
+    
     logger.info("Launching trading bots")
     
     # Create bot instances
