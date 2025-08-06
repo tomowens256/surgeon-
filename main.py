@@ -44,6 +44,9 @@ SCALER_5M = "scaler5mcrt.joblib"
 MODEL_15M = "15mbilstm_model.keras"
 SCALER_15M = "scaler15mcrt.joblib"
 
+# Prediction threshold (0.9140 for class 1)
+PREDICTION_THRESHOLD = 0.9140
+
 # Global variables
 GLOBAL_LOCK = threading.Lock()
 CRT_SIGNAL_COUNT = 0
@@ -213,8 +216,8 @@ def fetch_candles(last_time=None):
 # ========================
 class FeatureEngineer:
     def __init__(self):
-        # Updated feature list
-        self.features = [
+        # Base features without minute dummies
+        self.base_features = [
             'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
             'atr_z', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
             'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60', 'trend_strength_up',
@@ -231,16 +234,16 @@ class FeatureEngineer:
             'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
         ]
         
-        # Add minute buckets based on timeframe
+        # Timeframe-specific minute closed features
         if TIMEFRAME == "M5":
-            self.features += [
+            self.features = self.base_features + [
                 'minutes,closed_0', 'minutes,closed_5', 'minutes,closed_10', 
                 'minutes,closed_15', 'minutes,closed_20', 'minutes,closed_25', 
                 'minutes,closed_30', 'minutes,closed_35', 'minutes,closed_40', 
                 'minutes,closed_45', 'minutes,closed_50', 'minutes,closed_55'
             ]
-        else:  # M15
-            self.features += [
+        else:  # M15 timeframe
+            self.features = self.base_features + [
                 'minutes,closed_0', 'minutes,closed_15', 
                 'minutes,closed_30', 'minutes,closed_45'
             ]
@@ -849,10 +852,20 @@ class TradingDetector:
         """Predict using the single model for the current timeframe"""
         logger.info(f"Running prediction with {TIMEFRAME} model")
         
+        # Get expected feature count for current timeframe
+        expected_features = len(self.feature_engineer.features)
+        
         # Validate input shape
-        expected_features = 68 if TIMEFRAME == "M5" else 68  # Adjust if needed
         if features_df.shape[1] != expected_features:
             logger.error(f"Feature mismatch: Expected {expected_features} features, got {features_df.shape[1]}")
+            logger.error("Feature names in generated data:")
+            for i, feat in enumerate(features_df.columns):
+                logger.error(f"{i+1}. {feat}")
+                
+            logger.error("Expected feature names:")
+            for i, feat in enumerate(self.feature_engineer.features):
+                logger.error(f"{i+1}. {feat}")
+                
             return None, None
         
         try:
@@ -865,7 +878,7 @@ class TradingDetector:
             
             # Get prediction from the model
             prob = MODEL.predict(reshaped_features, verbose=0)[0][0]
-            final_pred = 1 if prob >= 0.55 else 0
+            final_pred = 1 if prob >= PREDICTION_THRESHOLD else 0
             outcome = "Worth Taking" if final_pred == 1 else "Likely Loss"
             
             logger.info(f"Model prediction: Prob={prob:.6f}, Outcome={outcome}")
@@ -1107,16 +1120,32 @@ def run_bot():
         if TIMEFRAME == "M5":
             model_path = os.path.join(MODELS_DIR, MODEL_5M)
             scaler_path = os.path.join(MODELS_DIR, SCALER_5M)
+            expected_features = 76  # 64 base + 12 minute dummies
         else:  # M15 timeframe
             model_path = os.path.join(MODELS_DIR, MODEL_15M)
             scaler_path = os.path.join(MODELS_DIR, SCALER_15M)
+            expected_features = 68  # 64 base + 4 minute dummies
             
         logger.info(f"Loading model: {model_path}")
         MODEL = load_model(model_path)
         logger.info(f"Loading scaler: {scaler_path}")
         SCALER = joblib.load(scaler_path)
         
+        # Verify feature dimension match
+        fe = FeatureEngineer()
+        actual_features = len(fe.features)
+        if actual_features != expected_features:
+            logger.error(f"CRITICAL: Feature dimension mismatch! Expected {expected_features}, got {actual_features}")
+            send_telegram(f"❌ *Feature Dimension Mismatch*\n"
+                          f"Timeframe: {TIMEFRAME}\n"
+                          f"Expected: {expected_features}\n"
+                          f"Actual: {actual_features}\n"
+                          "Please check feature engineering")
+            return
+        
         logger.info("Model and scaler loaded successfully")
+        logger.info(f"Feature dimensions match: {actual_features} features")
+        
     except Exception as e:
         logger.error(f"Failed to load model or scaler: {str(e)}")
         send_telegram(f"❌ *Failed to load model/scaler*:\n{str(e)}")
