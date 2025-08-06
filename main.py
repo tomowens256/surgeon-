@@ -254,9 +254,10 @@ class FeatureEngineer:
             crt_df = crt_df.sort_values('time').reset_index(drop=True)
         
         try:
-            c1 = crt_df.iloc[0]
-            c2 = crt_df.iloc[1]
-            c3 = crt_df.iloc[2]
+            # CORRECTED CANDLE REFERENCES
+            c1 = crt_df.iloc[0]  # Reference candle (two candles back)
+            c2 = crt_df.iloc[1]  # Breakout candle (previous candle)
+            c3 = crt_df.iloc[2]  # Current candle
             
             c1_low = c1['low']
             c1_high = c1['high']
@@ -281,12 +282,14 @@ class FeatureEngineer:
             )
             
             if buy_condition:
+                logger.info(f"✅ BUY VALIDATION| C2_Low:{c2_low:.5f} < C1_Low:{c1_low:.5f}| C2_Close:{c2_close:.5f} > C1_Low:{c1_low:.5f}| C3_Open:{c3_open:.5f} > C2_Mid:{c2_mid:.5f}")
                 signal_type = 'BUY'
                 entry = c3_open
                 sl = c2_low
                 risk = abs(entry - sl)
                 tp = entry + 4 * risk
             elif sell_condition:
+                logger.info(f"✅ SELL VALIDATION| C2_High:{c2_high:.5f} > C1_High:{c1_high:.5f}| C2_Close:{c2_close:.5f} < C1_High:{c1_high:.5f}| C3_Open:{c3_open:.5f} < C2_Mid:{c2_mid:.5f}")
                 signal_type = 'SELL'
                 entry = c3_open
                 sl = c2_high
