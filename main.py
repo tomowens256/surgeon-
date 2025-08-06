@@ -280,18 +280,21 @@ class FeatureEngineer:
             c2_range = c2_high - c2_low
             c2_mid = c2_low + (0.5 * c2_range)
 
+            # Fixed syntax error here - removed extra parentheses
             buy_condition = (
                 (c2_low < c1_low) and 
                 (c2_close > c1_low) and 
                 (c3_open > c2_mid) and
                 (c2_close > c2['open'])  # Bullish candle
-                
+            )
+            
             sell_condition = (
                 (c2_high > c1_high) and 
                 (c2_close < c1_high) and 
                 (c3_open < c2_mid) and
                 (c2_close < c2['open'])  # Bearish candle
-                
+            )
+            
             logger.debug(f"Buy conditions: {buy_condition}, Sell conditions: {sell_condition}")
             
             # Volume confirmation
