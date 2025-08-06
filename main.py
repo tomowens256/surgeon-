@@ -517,66 +517,6 @@ class FeatureEngineer:
         return features
 
 # ========================
-# REAL-TIME DETECTOR
-# ========================
-class RealTimeDetector:
-    def __init__(self, detector):
-        self.detector = detector
-        self.current_candle_time = None
-        self.running = True
-        self.thread = threading.Thread(target=self.run, daemon=True)
-        self.thread.start()
-
-    def run(self):
-        while self.running:
-            try:
-                current_time = datetime.now(NY_TZ)
-                
-                if self.detector.data.empty:
-                    time.sleep(self.detector.poll_interval)
-                    continue
-                    
-                with self.detector.lock:
-                    if self.detector.data.empty:
-                        continue
-                    latest_candle = self.detector.data.iloc[-1].copy()
-                
-                if self.current_candle_time != latest_candle['time']:
-                    self.current_candle_time = latest_candle['time']
-                    self.detector.scan_count_this_candle = 0
-                    self.detector.signal_found_this_candle = False
-                
-                if self.detector.signal_found_this_candle and self.detector.next_candle_time:
-                    sleep_seconds = (self.detector.next_candle_time - current_time).total_seconds()
-                    if sleep_seconds > 0:
-                        time.sleep(sleep_seconds)
-                    continue
-                
-                if (self.detector.scan_count_this_candle >= 2 and 
-                    not self.detector.signal_found_this_candle and 
-                    self.detector.next_candle_time):
-                    sleep_seconds = (self.detector.next_candle_time - current_time).total_seconds()
-                    if sleep_seconds > 0:
-                        time.sleep(sleep_seconds)
-                    continue
-                
-                candle_age = (current_time - latest_candle['time']).total_seconds() / 60.0
-                if (latest_candle['is_current'] and 
-                    candle_age >= self.detector.min_candle_age and 
-                    self.detector.scan_count_this_candle < 2):
-                    self.detector.process_signals(0, pd.DataFrame([latest_candle]))
-                    self.detector.scan_count_this_candle += 1
-                
-                time.sleep(self.detector.poll_interval)
-                
-            except Exception:
-                time.sleep(self.detector.poll_interval)
-
-    def stop(self):
-        self.running = False
-        self.thread.join(timeout=5)
-
-# ========================
 # TRADING DETECTOR
 # ========================
 class TradingDetector:
@@ -595,13 +535,15 @@ class TradingDetector:
         self.next_candle_time = None
         self.last_signal_candle = None
         self.active_trades = {}
-        self.realtime_detector = None
+        self.current_candle_time = None
+        self.running = True
         
         self.data = self.fetch_initial_candles()
         if self.data.empty or len(self.data) < 200:
             raise RuntimeError("Initial candle fetch failed")
             
-        self.realtime_detector = RealTimeDetector(self)
+        self.realtime_thread = threading.Thread(target=self.realtime_monitor, daemon=True)
+        self.realtime_thread.start()
         logger.info(f"TradingDetector initialized for {timeframe}")
 
     def fetch_initial_candles(self):
@@ -675,15 +617,12 @@ class TradingDetector:
             logger.error(f"Prediction failed: {str(e)}")
             return None, None
 
-    def process_signals(self, minutes_closed, latest_candles):
-        if not latest_candles.empty:
-            self.update_data(latest_candles)
-            
+    def process_signals(self):
         if self.data.empty or len(self.data) < 3:
             return
 
-        latest_candle_time = self.data.iloc[-1]['time']
         current_time = datetime.now(NY_TZ)
+        latest_candle_time = self.data.iloc[-1]['time']
         candle_age = self.calculate_candle_age(current_time, latest_candle_time)
         self.next_candle_time = self._get_next_candle_time(latest_candle_time)
 
@@ -715,7 +654,7 @@ class TradingDetector:
                         f"Candle Age: {candle_age:.2f} minutes"
                     )
                     if send_telegram(setup_msg):
-                        features = self.feature_engineer.generate_features(self.data, signal_type, minutes_closed)
+                        features = self.feature_engineer.generate_features(self.data, signal_type, candle_age)
                         if features is not None:
                             feature_msg = f"📊 *FEATURES* {INSTRUMENT.replace('_','/')} {signal_type}\n"
                             formatted_features = []
@@ -725,7 +664,7 @@ class TradingDetector:
                             feature_msg += "\n".join(formatted_features)
                             send_telegram(feature_msg)
 
-                        # PREDICTION CALL - FIXED
+                        # PREDICTION CALL
                         if self.scaler is not None and self.model is not None:
                             features_df = pd.DataFrame([features], columns=self.feature_engineer.features)
                             
@@ -753,7 +692,7 @@ class TradingDetector:
                         else:
                             logger.error("No scaler or model loaded")
 
-        if len(self.data) > 0 and minutes_closed == self.candle_duration:
+        if len(self.data) > 0 and candle_age >= self.candle_duration:
             latest_candle = self.data.iloc[-1]
             for trade_id, trade in list(self.active_trades.items()):
                 if trade.get('outcome') is None:
@@ -785,69 +724,59 @@ class TradingDetector:
                         if send_telegram(outcome_msg):
                             del self.active_trades[trade_id]
 
-# ========================
-# CANDLE SCHEDULER
-# ========================
-class CandleScheduler(threading.Thread):
-    def __init__(self, granularity):
-        super().__init__(daemon=True)
-        self.granularity = granularity
-        self.callback = None
-        self.active = True
-    
-    def register_callback(self, callback):
-        self.callback = callback
-        
-    def calculate_next_candle(self):
-        now = datetime.now(NY_TZ)
-        current_minute = now.minute
-        if self.granularity == "M5":
-            remainder = current_minute % 5
-            if remainder == 0:
-                return now.replace(second=0, microsecond=0) + timedelta(minutes=5)
-            next_minute = current_minute - remainder + 5
-            if next_minute >= 60:
-                return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
-            return now.replace(minute=next_minute, second=0, microsecond=0)
-        else:  # M15 timeframe
-            remainder = current_minute % 15
-            if remainder == 0:
-                return now.replace(second=0, microsecond=0) + timedelta(minutes=15)
-            next_minute = current_minute - remainder + 15
-            if next_minute >= 60:
-                return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
-            return now.replace(minute=next_minute, second=0, microsecond=0)
-    
-    def calculate_minutes_closed(self, latest_time):
-        if latest_time is None:
-            return 0
-        now = datetime.now(NY_TZ)
-        elapsed = (now - latest_time).total_seconds() / 60
-        max_closed = 4.9 if self.granularity == "M5" else 14.9
-        return min(max_closed, max(0, elapsed))
-    
-    def run(self):
-        while self.active:
+    def realtime_monitor(self):
+        while self.running:
             try:
-                df_candles = fetch_candles(self.granularity)
-                if df_candles.empty:
+                current_time = datetime.now(NY_TZ)
+                
+                if self.data.empty:
+                    time.sleep(self.poll_interval)
+                    continue
+                    
+                with self.lock:
+                    if self.data.empty:
+                        continue
+                    latest_candle = self.data.iloc[-1].copy()
+                
+                if self.current_candle_time != latest_candle['time']:
+                    self.current_candle_time = latest_candle['time']
+                    self.scan_count_this_candle = 0
+                    self.signal_found_this_candle = False
+                
+                if self.signal_found_this_candle and self.next_candle_time:
+                    sleep_seconds = (self.next_candle_time - current_time).total_seconds()
+                    if sleep_seconds > 0:
+                        time.sleep(sleep_seconds)
                     continue
                 
-                complete_candles = df_candles[df_candles['complete'] == True]
-                if not complete_candles.empty:
-                    latest_candle = complete_candles.iloc[-1]
-                    latest_time = latest_candle['time']
-                    minutes_closed = self.calculate_minutes_closed(latest_time)
-                    if self.callback:
-                        self.callback(minutes_closed, complete_candles.tail(1))
+                if (self.scan_count_this_candle >= 2 and 
+                    not self.signal_found_this_candle and 
+                    self.next_candle_time):
+                    sleep_seconds = (self.next_candle_time - current_time).total_seconds()
+                    if sleep_seconds > 0:
+                        time.sleep(sleep_seconds)
+                    continue
                 
-                now = datetime.now(NY_TZ)
-                next_run = self.calculate_next_candle()
-                sleep_seconds = (next_run - now).total_seconds()
-                time.sleep(max(1, sleep_seconds))
+                candle_age = (current_time - latest_candle['time']).total_seconds() / 60.0
+                if (latest_candle['is_current'] and 
+                    candle_age >= self.min_candle_age and 
+                    self.scan_count_this_candle < 2):
+                    self.process_signals()
+                    self.scan_count_this_candle += 1
+                
+                # Also process at end of candle for outcomes
+                if candle_age >= self.candle_duration:
+                    self.process_signals()
+                
+                time.sleep(self.poll_interval)
+                
             except Exception as e:
-                logger.error(f"Scheduler error: {str(e)}")
-                time.sleep(60)
+                logger.error(f"Realtime monitor error: {str(e)}")
+                time.sleep(5)
+
+    def stop(self):
+        self.running = False
+        self.realtime_thread.join(timeout=5)
 
 # ========================
 # BOT INSTANCE CLASS
@@ -859,8 +788,8 @@ class BotInstance:
         self.scaler = None
         self.detector = None
         self.logger = logging.getLogger(f"{__name__}.{timeframe}")
-        self.scheduler = None
         self.active_trades = {}
+        self.running = True
         
     def run(self):
         self.logger.info(f"Starting trading bot for {self.timeframe}")
@@ -880,20 +809,16 @@ class BotInstance:
             # Create detector with timeframe-specific model and scaler
             self.detector = TradingDetector(self.timeframe, self.model, self.scaler)
             
-            # Create scheduler with correct granularity string
-            self.scheduler = CandleScheduler(granularity=self.timeframe)
-            self.scheduler.register_callback(self.detector.process_signals)
-            self.scheduler.start()
-            
             self.logger.info(f"Bot started successfully for {self.timeframe}")
             
-            while True:
+            # Main data update loop
+            while self.running:
                 try:
                     last_time = self.detector.data['time'].max() if not self.detector.data.empty else None
                     df = fetch_candles(self.timeframe, last_time)
                     if not df.empty:
                         self.detector.update_data(df)
-                    time.sleep(self.detector.poll_interval)
+                    time.sleep(3)
                 except Exception as e:
                     self.logger.error(f"Main loop error: {e}")
                     time.sleep(10)
@@ -901,6 +826,13 @@ class BotInstance:
         except Exception as e:
             self.logger.error(f"Failed to start bot: {str(e)}")
             send_telegram(f"❌ *Bot Failed to Start for {self.timeframe}*:\n{str(e)}")
+        finally:
+            self.detector.stop()
+
+    def stop(self):
+        self.running = False
+        if self.detector:
+            self.detector.stop()
 
 # ========================
 # MAIN FUNCTION
@@ -921,8 +853,16 @@ def run_bot():
     thread_15m.start()
     
     # Keep main thread alive
-    while True:
-        time.sleep(1)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Shutting down bots...")
+        bot_5m.stop()
+        bot_15m.stop()
+        thread_5m.join(5)
+        thread_15m.join(5)
+        logger.info("Bots stopped")
 
 if __name__ == "__main__":
     logger.info("Launching main application")
