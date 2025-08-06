@@ -580,8 +580,10 @@ class RealTimeDetector:
 # TRADING DETECTOR
 # ========================
 class TradingDetector:
-    def __init__(self, timeframe):
+    def __init__(self, timeframe, model, scaler):
         self.timeframe = timeframe
+        self.model = model
+        self.scaler = scaler
         self.data = pd.DataFrame()
         self.feature_engineer = FeatureEngineer(timeframe)
         self.candle_duration = 5 if timeframe == "M5" else 15
@@ -654,21 +656,23 @@ class TradingDetector:
                 
                 self.data = self.data.sort_values('time').reset_index(drop=True).tail(201)
 
-    def predict_single_model(self, features_df, model, scaler):
+    def predict_single_model(self, features_df):
         expected_features = len(self.feature_engineer.features)
         
         if features_df.shape[1] != expected_features:
+            logger.error(f"Feature mismatch: Expected {expected_features} features, got {features_df.shape[1]}")
             return None, None
         
         try:
             features_array = features_df.values
-            scaled_features = scaler.transform(features_array)
+            scaled_features = self.scaler.transform(features_array)
             reshaped_features = np.expand_dims(scaled_features, axis=1)
-            prob = model.predict(reshaped_features, verbose=0)[0][0]
+            prob = self.model.predict(reshaped_features, verbose=0)[0][0]
             final_pred = 1 if prob >= PREDICTION_THRESHOLD else 0
             outcome = "Worth Taking" if final_pred == 1 else "Likely Loss"
             return prob, outcome
-        except Exception:
+        except Exception as e:
+            logger.error(f"Prediction failed: {str(e)}")
             return None, None
 
     def process_signals(self, minutes_closed, latest_candles):
@@ -721,6 +725,34 @@ class TradingDetector:
                             feature_msg += "\n".join(formatted_features)
                             send_telegram(feature_msg)
 
+                        # PREDICTION CALL - FIXED
+                        if self.scaler is not None and self.model is not None:
+                            features_df = pd.DataFrame([features], columns=self.feature_engineer.features)
+                            
+                            prob, outcome = self.predict_single_model(features_df)
+                            
+                            if prob is not None:
+                                pred_msg = f"🤖 *MODEL PREDICTION* {INSTRUMENT.replace('_','/')} {signal_type}\n"
+                                pred_msg += f"Probability: {prob:.6f}\n"
+                                pred_msg += f"Decision: {outcome}\n"
+                                pred_msg += f"Model: {MODEL_5M if self.timeframe == 'M5' else MODEL_15M}"
+                                
+                                if send_telegram(pred_msg):
+                                    # Store new trade with prediction
+                                    trade_id = f"{signal_type}_{current_time.timestamp()}"
+                                    self.active_trades[trade_id] = {
+                                        'entry': signal_data['entry'],
+                                        'sl': signal_data['sl'],
+                                        'tp': signal_data['tp'],
+                                        'time': current_time,
+                                        'signal_time': signal_data['time'],
+                                        'prediction': prob,
+                                        'outcome': None
+                                    }
+                                    logger.info(f"New trade stored: {trade_id} with prediction {prob:.6f}")
+                        else:
+                            logger.error("No scaler or model loaded")
+
         if len(self.data) > 0 and minutes_closed == self.candle_duration:
             latest_candle = self.data.iloc[-1]
             for trade_id, trade in list(self.active_trades.items()):
@@ -750,16 +782,16 @@ class TradingDetector:
                             f"Outcome: {trade['outcome']}\n"
                             f"Detected at: {current_time.strftime('%Y-%m-%d %H:%M')} NY"
                         )
-                        send_telegram(outcome_msg)
-                        del self.active_trades[trade_id]
+                        if send_telegram(outcome_msg):
+                            del self.active_trades[trade_id]
 
 # ========================
 # CANDLE SCHEDULER
 # ========================
 class CandleScheduler(threading.Thread):
-    def __init__(self, timeframe):
+    def __init__(self, granularity):
         super().__init__(daemon=True)
-        self.timeframe = timeframe
+        self.granularity = granularity
         self.callback = None
         self.active = True
     
@@ -769,26 +801,35 @@ class CandleScheduler(threading.Thread):
     def calculate_next_candle(self):
         now = datetime.now(NY_TZ)
         current_minute = now.minute
-        remainder = current_minute % self.timeframe
-        if remainder == 0:
-            return now.replace(second=0, microsecond=0) + timedelta(minutes=self.timeframe)
-        next_minute = current_minute - remainder + self.timeframe
-        if next_minute >= 60:
-            return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
-        return now.replace(minute=next_minute, second=0, microsecond=0)
+        if self.granularity == "M5":
+            remainder = current_minute % 5
+            if remainder == 0:
+                return now.replace(second=0, microsecond=0) + timedelta(minutes=5)
+            next_minute = current_minute - remainder + 5
+            if next_minute >= 60:
+                return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
+            return now.replace(minute=next_minute, second=0, microsecond=0)
+        else:  # M15 timeframe
+            remainder = current_minute % 15
+            if remainder == 0:
+                return now.replace(second=0, microsecond=0) + timedelta(minutes=15)
+            next_minute = current_minute - remainder + 15
+            if next_minute >= 60:
+                return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
+            return now.replace(minute=next_minute, second=0, microsecond=0)
     
     def calculate_minutes_closed(self, latest_time):
         if latest_time is None:
             return 0
         now = datetime.now(NY_TZ)
         elapsed = (now - latest_time).total_seconds() / 60
-        max_closed = 4.9 if self.timeframe == 5 else 14.9
+        max_closed = 4.9 if self.granularity == "M5" else 14.9
         return min(max_closed, max(0, elapsed))
     
     def run(self):
         while self.active:
             try:
-                df_candles = fetch_candles(self.timeframe)
+                df_candles = fetch_candles(self.granularity)
                 if df_candles.empty:
                     continue
                 
@@ -804,7 +845,8 @@ class CandleScheduler(threading.Thread):
                 next_run = self.calculate_next_candle()
                 sleep_seconds = (next_run - now).total_seconds()
                 time.sleep(max(1, sleep_seconds))
-            except Exception:
+            except Exception as e:
+                logger.error(f"Scheduler error: {str(e)}")
                 time.sleep(60)
 
 # ========================
@@ -828,18 +870,18 @@ class BotInstance:
             if self.timeframe == "M5":
                 model_path = os.path.join(MODELS_DIR, MODEL_5M)
                 scaler_path = os.path.join(MODELS_DIR, SCALER_5M)
-                expected_features = 76  # 64 base + 12 minute dummies
             else:  # M15 timeframe
                 model_path = os.path.join(MODELS_DIR, MODEL_15M)
                 scaler_path = os.path.join(MODELS_DIR, SCALER_15M)
-                expected_features = 68  # 64 base + 4 minute dummies
                 
             self.model = load_model(model_path)
             self.scaler = joblib.load(scaler_path)
             
-            # Create detector with timeframe-specific feature engineer
-            self.detector = TradingDetector(self.timeframe)
-            self.scheduler = CandleScheduler(timeframe=5 if self.timeframe == "M5" else 15)
+            # Create detector with timeframe-specific model and scaler
+            self.detector = TradingDetector(self.timeframe, self.model, self.scaler)
+            
+            # Create scheduler with correct granularity string
+            self.scheduler = CandleScheduler(granularity=self.timeframe)
             self.scheduler.register_callback(self.detector.process_signals)
             self.scheduler.start()
             
