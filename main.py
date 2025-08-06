@@ -32,12 +32,12 @@ API_KEY = os.getenv("OANDA_API_KEY")
 
 # Instrument and timeframe configuration
 INSTRUMENT = "XAU_USD"
-TIMEFRAME = "M5"  # Default to 5-minute timeframe
+TIMEFRAME = "M5"  # Can be "M5" or "M15"
 CANDLE_COUNT = 201  # Exactly 201 candles
-REALTIME_POLL_INTERVAL = 3  # More frequent checks for 5m timeframe
-MIN_CANDLE_AGE_FOR_SIGNAL = 0.25  # Minimum 15 seconds candle age to check signals
+REALTIME_POLL_INTERVAL = 3 if TIMEFRAME == "M5" else 5  # More frequent checks for 5m
+MIN_CANDLE_AGE_FOR_SIGNAL = 0.25 if TIMEFRAME == "M5" else 0.5  # 15s for 5m, 30s for 15m
 
-# Model and scaler paths
+# Model and scaler paths - timeframe specific
 MODELS_DIR = "ml_models"
 MODEL_5M = "5mbilstm_model.keras"
 SCALER_5M = "scaler5mcrt.joblib"
@@ -52,6 +52,9 @@ SIGNALS = []
 REALTIME_DATA_QUEUE = queue.Queue()
 MODEL = None
 SCALER = None
+SIGNAL_FOUND_THIS_CANDLE = False
+NEXT_CANDLE_TIME = None
+SCAN_COUNT_THIS_CANDLE = 0
 
 # Initialize logging
 logging.basicConfig(
@@ -66,6 +69,9 @@ logger = logging.getLogger(__name__)
 
 # Initialize Oanda API
 oanda_api = API(access_token=API_KEY, environment="practice")
+
+# Dictionary to store trades
+active_trades = {}
 
 # ========================
 # UTILITY FUNCTIONS
@@ -123,7 +129,7 @@ def send_telegram(message):
     return False
 
 def fetch_candles(last_time=None):
-    """Fetch exactly 201 candles for XAU_USD M5 with full precision"""
+    """Fetch exactly 201 candles for XAU_USD with full precision"""
     logger.info(f"Fetching {CANDLE_COUNT} candles for {INSTRUMENT} with timeframe {TIMEFRAME}")
     params = {
         "granularity": TIMEFRAME,
@@ -203,11 +209,11 @@ def fetch_candles(last_time=None):
     return pd.DataFrame()
 
 # ========================
-# FEATURE ENGINEER (NO VOLUME IMPUTATION)
+# FEATURE ENGINEER WITH VOLUME IMPUTATION
 # ========================
 class FeatureEngineer:
     def __init__(self):
-        # Updated feature list for 5-minute timeframe
+        # Updated feature list
         self.features = [
             'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
             'atr_z', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
@@ -215,20 +221,31 @@ class FeatureEngineer:
             'trend_strength_down', 'sl_price', 'tp_price', 'prev_volume', 'sl_distance',
             'tp_distance', 'rrr', 'log_sl', 'prev_body_size', 'prev_wick_up',
             'prev_wick_down', 'is_bad_combo', 'price_div_vol', 'rsi_div_macd',
-            'price_div_vwap', 'sl_div_atr', 'tp_div_atr', 'rrr_div_rsi', 'day_Friday',
-            'day_Monday', 'day_Sunday', 'day_Thursday', 'day_Tuesday', 'day_Wednesday',
-            'session_q1', 'session_q2', 'session_q3', 'session_q4', 'rsi_zone_neutral',
-            'rsi_zone_overbought', 'rsi_zone_oversold', 'rsi_zone_unknown',
-            'trend_direction_downtrend', 'trend_direction_sideways',
+            'price_div_vwap', 'sl_div_atr', 'tp_div_atr', 'rrr_div_rsi',
+            'day_Friday', 'day_Monday', 'day_Sunday', 'day_Thursday', 'day_Tuesday',
+            'day_Wednesday', 'session_q1', 'session_q2', 'session_q3', 'session_q4',
+            'rsi_zone_neutral', 'rsi_zone_overbought', 'rsi_zone_oversold',
+            'rsi_zone_unknown', 'trend_direction_downtrend', 'trend_direction_sideways',
             'trend_direction_uptrend', 'crt_BUY', 'crt_SELL', 'trade_type_BUY',
             'trade_type_SELL', 'combo_flag_dead', 'combo_flag_fair', 'combo_flag_fine',
-            'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine', 'minutes,closed_0',
-            'minutes,closed_5', 'minutes,closed_10', 'minutes,closed_15', 'minutes,closed_20',
-            'minutes,closed_25', 'minutes,closed_30', 'minutes,closed_35', 'minutes,closed_40',
-            'minutes,closed_45', 'minutes,closed_50', 'minutes,closed_55'
+            'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
         ]
         
-        # Features to shift (from your shi list)
+        # Add minute buckets based on timeframe
+        if TIMEFRAME == "M5":
+            self.features += [
+                'minutes,closed_0', 'minutes,closed_5', 'minutes,closed_10', 
+                'minutes,closed_15', 'minutes,closed_20', 'minutes,closed_25', 
+                'minutes,closed_30', 'minutes,closed_35', 'minutes,closed_40', 
+                'minutes,closed_45', 'minutes,closed_50', 'minutes,closed_55'
+            ]
+        else:  # M15
+            self.features += [
+                'minutes,closed_0', 'minutes,closed_15', 
+                'minutes,closed_30', 'minutes,closed_45'
+            ]
+        
+        # Features to shift
         self.shift_features = [
             'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
             'atr_z', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100',
@@ -240,110 +257,178 @@ class FeatureEngineer:
             'rsi_zone_oversold', 'rsi_zone_unknown', 'combo_flag_dead', 'combo_flag_fair',
             'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
         ]
+        
+        # Store historical volume data for imputation
+        self.historical_volumes = defaultdict(list)
+
+    def get_same_period_candles(self, df, current_time):
+        """Get candles from same time period in previous days"""
+        # Create time key (hour:minute)
+        time_key = current_time.strftime('%H:%M')
+        
+        # If we have historical data, use it
+        if time_key in self.historical_volumes and len(self.historical_volumes[time_key]) > 0:
+            logger.debug(f"Using historical volume data for time: {time_key}")
+            return self.historical_volumes[time_key]
+        
+        # Otherwise, build historical data from existing df
+        logger.info(f"Building historical volume data for time: {time_key}")
+        same_period = []
+        
+        # Only consider complete candles for historical data
+        complete_df = df[df['complete'] == True]
+        
+        for idx, row in complete_df.iterrows():
+            row_time = row['time']
+            if row_time.strftime('%H:%M') == time_key:
+                same_period.append(row['volume'])
+        
+        # Store for future use
+        self.historical_volumes[time_key] = same_period
+        return same_period
 
     def calculate_crt_signal(self, df):
-        """Robust CRT signal calculation with detailed validation"""
+        """Robust CRT signal calculation with validation using direct indexing"""
         logger.info("CRT signal calculation with validation")
+        
+        # Ensure we have at least 3 candles
         if len(df) < 3:
             logger.warning(f"Insufficient data: {len(df)} rows, need at least 3")
             return None, None
-
+            
         # Create working copy with explicit index reset
-        df = df.tail(3).copy().reset_index(drop=True)
+        crt_df = df.tail(3).copy().reset_index(drop=True)
         
+        # Verify we have exactly 3 candles
+        if len(crt_df) < 3:
+            logger.warning(f"Only {len(crt_df)} rows after slicing, need 3")
+            return None, None
+            
         # Verify chronological order
-        if not df['time'].is_monotonic_increasing:
+        if not crt_df['time'].is_monotonic_increasing:
             logger.error("Candles not in chronological order! Re-sorting...")
-            df = df.sort_values('time').reset_index(drop=True)
+            crt_df = crt_df.sort_values('time').reset_index(drop=True)
         
-        # Create shifted columns with boundary checks
-        df['c1_low'] = df['low'].shift(2, fill_value=np.nan)
-        df['c1_high'] = df['high'].shift(2, fill_value=np.nan)
-        df['c2_low'] = df['low'].shift(1, fill_value=np.nan)
-        df['c2_high'] = df['high'].shift(1, fill_value=np.nan)
-        df['c2_close'] = df['close'].shift(1, fill_value=np.nan)
-        df['c2_open'] = df['open'].shift(1, fill_value=np.nan)
-
-        # Validate we have complete historical candles
-        if df.isnull().any().any():
-            missing = df.columns[df.isnull().any()].tolist()
-            logger.error(f"Missing values in CRT columns: {missing}")
-            return None, None
-
-        # Calculate candle metrics
-        df['c2_range'] = df['c2_high'] - df['c2_low']
-        df['c2_mid'] = df['c2_low'] + (0.5 * df['c2_range'])
-
-        # Vectorized conditions with explicit validation
-        buy_mask = (
-            (df['c2_low'] < df['c1_low']) & 
-            (df['c2_close'] > df['c1_low']) & 
-            (df['open'] > df['c2_mid'])
-        )
-
-        sell_mask = (
-            (df['c2_high'] > df['c1_high']) & 
-            (df['c2_close'] < df['c1_high']) & 
-            (df['open'] < df['c2_mid'])
-        )
-
-        # Extract signal for current candle
-        current = df.iloc[-1]
-        if buy_mask.iloc[-1]:
-            # Log detailed validation
-            logger.info(f"✅ BUY VALIDATION| "
-                        f"C2_Low:{current['c2_low']:.5f} < C1_Low:{current['c1_low']:.5f}| "
-                        f"C2_Close:{current['c2_close']:.5f} > C1_Low:{current['c1_low']:.5f}| "
-                        f"Current_Open:{current['open']:.5f} > C2_Mid:{current['c2_mid']:.5f}")
+        try:
+            # CORRECTED CANDLE REFERENCES:
+            c1 = crt_df.iloc[0]  # Reference candle (two candles back)
+            c2 = crt_df.iloc[1]  # Breakout candle (previous candle)
+            c3 = crt_df.iloc[2]  # Current candle
             
-            signal_type = 'BUY'
-            entry = current['open']
-            sl = current['c2_low']
-            risk = abs(entry - sl)
-            tp = entry + 4 * risk
-            logger.info(f"BUY signal validated")
+            # Extract prices
+            c1_low = c1['low']
+            c1_high = c1['high']
+            c2_low = c2['low']
+            c2_high = c2['high']
+            c2_close = c2['close']
+            c3_open = c3['open']
             
-        elif sell_mask.iloc[-1]:
-            # Log detailed validation
-            logger.info(f"✅ SELL VALIDATION| "
-                        f"C2_High:{current['c2_high']:.5f} > C1_High:{current['c1_high']:.5f}| "
-                        f"C2_Close:{current['c2_close']:.5f} < C1_High:{current['c1_high']:.5f}| "
-                        f"Current_Open:{current['open']:.5f} < C2_Mid:{current['c2_mid']:.5f}")
+            # Calculate candle metrics
+            c2_range = c2_high - c2_low
+            c2_mid = c2_low + (0.5 * c2_range)
+
+            # Vectorized conditions with explicit validation
+            buy_condition = (
+                (c2_low < c1_low) and 
+                (c2_close > c1_low) and 
+                (c3_open > c2_mid)
+            )
+
+            sell_condition = (
+                (c2_high > c1_high) and 
+                (c2_close < c1_high) and 
+                (c3_open < c2_mid)
+            )
             
-            signal_type = 'SELL'
-            entry = current['open']
-            sl = current['c2_high']
-            risk = abs(sl - entry)
-            tp = entry - 4 * risk
-            logger.info(f"SELL signal validated")
-            
-        else:
-            # Log why no signal was detected
-            logger.info("❌ No signal detected:")
-            if not (current['c2_low'] < current['c1_low']):
-                logger.info(f"  - C2_Low:{current['c2_low']:.5f} >= C1_Low:{current['c1_low']:.5f}")
-            if not (current['c2_close'] > current['c1_low']):
-                logger.info(f"  - C2_Close:{current['c2_close']:.5f} <= C1_Low:{current['c1_low']:.5f}")
-            if not (current['open'] > current['c2_mid']):
-                logger.info(f"  - Open:{current['open']:.5f} <= C2_Mid:{current['c2_mid']:.5f}")
-            if not (current['c2_high'] > current['c1_high']):
-                logger.info(f"  - C2_High:{current['c2_high']:.5f} <= C1_High:{current['c1_high']:.5f}")
-            if not (current['c2_close'] < current['c1_high']):
-                logger.info(f"  - C2_Close:{current['c2_close']:.5f} >= C1_High:{current['c1_high']:.5f}")
-            if not (current['open'] < current['c2_mid']):
-                logger.info(f"  - Open:{current['open']:.5f} >= C2_Mid:{current['c2_mid']:.5f}")
+            # Extract signal for current candle
+            if buy_condition:
+                # Log detailed validation
+                logger.info(f"✅ BUY VALIDATION| "
+                            f"C2_Low:{c2_low:.5f} < C1_Low:{c1_low:.5f}| "
+                            f"C2_Close:{c2_close:.5f} > C1_Low:{c1_low:.5f}| "
+                            f"C3_Open:{c3_open:.5f} > C2_Mid:{c2_mid:.5f}")
                 
+                signal_type = 'BUY'
+                entry = c3_open
+                sl = c2_low
+                risk = abs(entry - sl)
+                tp = entry + 4 * risk
+                logger.info(f"BUY signal validated")
+                
+            elif sell_condition:
+                # Log detailed validation
+                logger.info(f"✅ SELL VALIDATION| "
+                            f"C2_High:{c2_high:.5f} > C1_High:{c1_high:.5f}| "
+                            f"C2_Close:{c2_close:.5f} < C1_High:{c1_high:.5f}| "
+                            f"C3_Open:{c3_open:.5f} < C2_Mid:{c2_mid:.5f}")
+                
+                signal_type = 'SELL'
+                entry = c3_open
+                sl = c2_high
+                risk = abs(sl - entry)
+                tp = entry - 4 * risk
+                logger.info(f"SELL signal validated")
+                
+            else:
+                # Log why no signal was detected
+                logger.info("❌ No signal detected:")
+                if not (c2_low < c1_low):
+                    logger.info(f"  - C2_Low:{c2_low:.5f} >= C1_Low:{c1_low:.5f}")
+                if not (c2_close > c1_low):
+                    logger.info(f"  - C2_Close:{c2_close:.5f} <= C1_Low:{c1_low:.5f}")
+                if not (c3_open > c2_mid):
+                    logger.info(f"  - C3_Open:{c3_open:.5f} <= C2_Mid:{c2_mid:.5f}")
+                if not (c2_high > c1_high):
+                    logger.info(f"  - C2_High:{c2_high:.5f} <= C1_High:{c1_high:.5f}")
+                if not (c2_close < c1_high):
+                    logger.info(f"  - C2_Close:{c2_close:.5f} >= C1_High:{c1_high:.5f}")
+                if not (c3_open < c2_mid):
+                    logger.info(f"  - C3_Open:{c3_open:.5f} >= C2_Mid:{c2_mid:.5f}")
+                    
+                return None, None
+            
+            logger.info(f"Detected signal: {signal_type} at {c3['time']}")
+            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': c3['time']}
+            
+        except KeyError as e:
+            logger.error(f"Missing price data in candle: {str(e)}")
             return None, None
-        
-        logger.info(f"Detected signal: {signal_type} at {current['time']}")
-        return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': current['time']}
 
     def calculate_technical_indicators(self, df):
-        """Calculate technical indicators without volume imputation"""
-        logger.info("Calculating technical indicators")
+        """Calculate technical indicators with volume imputation"""
+        logger.info("Calculating technical indicators with volume imputation")
         df = df.copy().drop_duplicates(subset=['time'], keep='last')
         
-        # REMOVED VOLUME IMPUTATION - USING RAW VOLUME VALUES
+        # Apply volume imputation to incomplete candles
+        if not df.empty and not df.iloc[-1]['complete']:
+            current_candle = df.iloc[-1]
+            current_time = current_candle['time']
+            
+            # Get historical volumes for same time period
+            same_period_volumes = self.get_same_period_candles(df, current_time)
+            
+            if len(same_period_volumes) > 0:
+                # Calculate average volume for this time period
+                avg_volume = np.mean(same_period_volumes)
+                
+                # Get current volume
+                current_volume = current_candle['volume']
+                
+                # Calculate volume ratio
+                volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+                
+                # Cap the ratio to avoid extreme values
+                volume_ratio = min(3.0, max(0.1, volume_ratio))
+                
+                # Estimate final volume
+                estimated_volume = avg_volume * volume_ratio
+                
+                logger.info(f"Volume imputation: Current={current_volume}, "
+                            f"Avg={avg_volume:.2f}, Ratio={volume_ratio:.2f}, "
+                            f"Estimated={estimated_volume:.2f}")
+                
+                # Apply imputation
+                df.at[df.index[-1], 'volume'] = estimated_volume
         
         # Continue with indicator calculations
         df['adj close'] = df['open']
@@ -478,18 +563,17 @@ class FeatureEngineer:
         return df
 
     def calculate_minutes_closed(self, df, minutes_closed):
-        """Calculate minutes closed for timeframe"""
         logger.info(f"Calculating minutes closed: {minutes_closed}")
         df = df.copy()
         
         # Create minute bucket columns based on timeframe
         if TIMEFRAME == "M5":
             minute_buckets = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+            minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
         else:  # M15 timeframe
             minute_buckets = [0, 15, 30, 45]
+            minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
             
-        minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
-        
         # Initialize all to 0
         for col in minute_cols:
             df[col] = 0
@@ -522,7 +606,6 @@ class FeatureEngineer:
         df = self.calculate_categorical_features(df)
         df = self.calculate_minutes_closed(df, minutes_closed)
         
-        # Candle metrics
         df['prev_volume'] = df['volume'].shift(1)
         df['body_size'] = abs(df['close'] - df['open'])
         df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
@@ -532,7 +615,6 @@ class FeatureEngineer:
         df['prev_wick_down'] = df['wick_down'].shift(1)
         logger.debug("Candle and volume features calculated")
         
-        # Derived metrics
         df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
         df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
         df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
@@ -541,7 +623,6 @@ class FeatureEngineer:
         df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
         logger.debug("Derived metrics calculated")
         
-        # Combo flags
         combo_key = f"{df['rsi'].iloc[-1]:.2f}_{df['macd_z'].iloc[-1]:.2f}_{df['atr_z'].iloc[-1]:.2f}"
         logger.debug(f"Combo key calculated: {combo_key}")
         combo_flags = {'combo_flag_dead': 0, 'combo_flag_fair': 0, 'combo_flag_fine': 0}
@@ -564,14 +645,12 @@ class FeatureEngineer:
         df['is_bad_combo'] = 1 if combo_flags['combo_flag_dead'] == 1 else 0
         logger.debug(f"is_bad_combo set to: {df['is_bad_combo'].iloc[-1]}")
         
-        # CRT and trade type encoding
         df['crt_BUY'] = int(signal_type == 'BUY')
         df['crt_SELL'] = int(signal_type == 'SELL')
         df['trade_type_BUY'] = int(signal_type == 'BUY')
         df['trade_type_SELL'] = int(signal_type == 'SELL')
         logger.debug("CRT and trade type encoding applied")
         
-        # Extract features for current candle
         features = pd.Series(index=self.features, dtype=float)
         for feat in self.features:
             if feat in df.columns:
@@ -605,33 +684,60 @@ class FeatureEngineer:
 class RealTimeDetector:
     def __init__(self, detector):
         self.detector = detector
-        self.last_check_time = None
+        self.current_candle_time = None
         self.running = True
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
         logger.info("Real-time detector started")
 
     def run(self):
-        """Continuously check for signals in real-time"""
+        """Optimized scanning with sleep management"""
+        global SCAN_COUNT_THIS_CANDLE, SIGNAL_FOUND_THIS_CANDLE, NEXT_CANDLE_TIME
+        
         while self.running:
             try:
                 current_time = datetime.now(NY_TZ)
                 
-                # Only check if we have fresh data
+                # Skip if no data
                 if self.detector.data.empty:
                     time.sleep(REALTIME_POLL_INTERVAL)
                     continue
                     
-                # Get latest candle (candle 3 - current/incomplete)
-                latest_candle = self.detector.data.iloc[-1]
+                # Get latest candle safely
+                with GLOBAL_LOCK:
+                    if self.detector.data.empty:
+                        continue
+                    latest_candle = self.detector.data.iloc[-1].copy()
                 
-                # Calculate candle age in minutes
+                # Reset state for new candle
+                if self.current_candle_time != latest_candle['time']:
+                    self.current_candle_time = latest_candle['time']
+                    SCAN_COUNT_THIS_CANDLE = 0
+                    SIGNAL_FOUND_THIS_CANDLE = False
+                    logger.info(f"New candle detected at {self.current_candle_time}, resetting scan count")
+                
+                # Sleep until next candle if signal found
+                if SIGNAL_FOUND_THIS_CANDLE and NEXT_CANDLE_TIME:
+                    sleep_seconds = (NEXT_CANDLE_TIME - current_time).total_seconds()
+                    if sleep_seconds > 0:
+                        logger.info(f"Signal found, sleeping {sleep_seconds:.1f}s until next candle")
+                        time.sleep(sleep_seconds)
+                    continue
+                
+                # Sleep if no signal after 2 scans
+                if SCAN_COUNT_THIS_CANDLE >= 2 and not SIGNAL_FOUND_THIS_CANDLE and NEXT_CANDLE_TIME:
+                    sleep_seconds = (NEXT_CANDLE_TIME - current_time).total_seconds()
+                    if sleep_seconds > 0:
+                        logger.info(f"No signal after 2 scans, sleeping {sleep_seconds:.1f}s until next candle")
+                        time.sleep(sleep_seconds)
+                    continue
+                
+                # Only scan if candle is ready and we have scans remaining
                 candle_age = (current_time - latest_candle['time']).total_seconds() / 60.0
-                
-                # Only check if candle is new enough and incomplete
-                if latest_candle['is_current'] and candle_age >= MIN_CANDLE_AGE_FOR_SIGNAL:
-                    # Process signals with 0 minutes closed (real-time)
+                if latest_candle['is_current'] and candle_age >= MIN_CANDLE_AGE_FOR_SIGNAL and SCAN_COUNT_THIS_CANDLE < 2:
+                    logger.info(f"Scanning candle (scan {SCAN_COUNT_THIS_CANDLE+1}/2)")
                     self.detector.process_signals(0, pd.DataFrame([latest_candle]))
+                    SCAN_COUNT_THIS_CANDLE += 1
                 
                 time.sleep(REALTIME_POLL_INTERVAL)
                 
@@ -653,7 +759,8 @@ class TradingDetector:
         logger.info("Initializing TradingDetector")
         self.data = pd.DataFrame()
         self.feature_engineer = FeatureEngineer()
-        self.scheduler = CandleScheduler(timeframe=5 if TIMEFRAME == "M5" else 15)
+        self.candle_duration = 5 if TIMEFRAME == "M5" else 15
+        self.scheduler = CandleScheduler(timeframe=self.candle_duration)
         self.last_signal_candle = None
         self.realtime_detector = None
         
@@ -688,7 +795,7 @@ class TradingDetector:
     def calculate_candle_age(self, current_time, candle_time):
         """Calculate age of the latest candle in minutes"""
         elapsed = (current_time - candle_time).total_seconds() / 60
-        return min(5 if TIMEFRAME == "M5" else 15, max(0, elapsed))
+        return min(self.candle_duration, max(0, elapsed))
 
     def _get_next_candle_time(self, current_time):
         """Calculate the next candle open time"""
@@ -771,6 +878,8 @@ class TradingDetector:
 
     def process_signals(self, minutes_closed, latest_candles):
         logger.info(f"Processing signals, minutes closed: {minutes_closed}, candles: {len(latest_candles)}")
+        global SIGNAL_FOUND_THIS_CANDLE, NEXT_CANDLE_TIME, SCAN_COUNT_THIS_CANDLE
+        
         if not latest_candles.empty:
             logger.info(f"Updating data with {len(latest_candles)} new candles")
             self.update_data(latest_candles)
@@ -786,6 +895,10 @@ class TradingDetector:
         current_time = datetime.now(NY_TZ)
         candle_age = self.calculate_candle_age(current_time, latest_candle_time)
         logger.info(f"Candle age: {candle_age:.2f} minutes")
+        
+        # Calculate next candle time
+        NEXT_CANDLE_TIME = self._get_next_candle_time(latest_candle_time)
+        logger.info(f"Next candle time: {NEXT_CANDLE_TIME}")
 
         # CRT SIGNAL DETECTION (using candle 3 as current)
         signal_type, signal_data = self.feature_engineer.calculate_crt_signal(self.data)
@@ -807,6 +920,7 @@ class TradingDetector:
                         break
                 
                 if is_new_trade:
+                    SIGNAL_FOUND_THIS_CANDLE = True
                     logger.info(f"New signal validated: {signal_type}")
                     alert_time = signal_data['time'].astimezone(NY_TZ)
                     setup_msg = (
@@ -819,7 +933,7 @@ class TradingDetector:
                         f"Candle Age: {candle_age:.2f} minutes"
                     )
                     if send_telegram(setup_msg):
-                        features = self.feature_engineer.generate_features(self.data, signal_type, 0)
+                        features = self.feature_engineer.generate_features(self.data, signal_type, minutes_closed)
                         if features is not None:
                             feature_msg = f"📊 *FEATURES* {INSTRUMENT.replace('_','/')} {signal_type}\n"
                             formatted_features = []
@@ -863,8 +977,7 @@ class TradingDetector:
                 logger.debug("Signal skipped due to similar candle conditions")
 
         # TRADE OUTCOME CHECKING (only on completed candles)
-        candle_duration = 5 if TIMEFRAME == "M5" else 15
-        if len(self.data) > 0 and minutes_closed == candle_duration:
+        if len(self.data) > 0 and minutes_closed == self.candle_duration:
             latest_candle = self.data.iloc[-1]
             for trade_id, trade in list(active_trades.items()):
                 if trade.get('outcome') is None:
@@ -909,7 +1022,7 @@ class TradingDetector:
 # CANDLE SCHEDULER
 # ========================
 class CandleScheduler(threading.Thread):
-    def __init__(self, timeframe=5):
+    def __init__(self, timeframe=15):
         super().__init__(daemon=True)
         self.timeframe = timeframe
         self.callback = None
@@ -922,22 +1035,13 @@ class CandleScheduler(threading.Thread):
     def calculate_next_candle(self):
         now = datetime.now(NY_TZ)
         current_minute = now.minute
-        if self.timeframe == 5:
-            remainder = current_minute % 5
-            if remainder == 0:
-                return now.replace(second=0, microsecond=0) + timedelta(minutes=5)
-            next_minute = current_minute - remainder + 5
-            if next_minute >= 60:
-                return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
-            return now.replace(minute=next_minute, second=0, microsecond=0)
-        else:  # 15-minute timeframe
-            remainder = current_minute % 15
-            if remainder == 0:
-                return now.replace(second=0, microsecond=0) + timedelta(minutes=15)
-            next_minute = current_minute - remainder + 15
-            if next_minute >= 60:
-                return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
-            return now.replace(minute=next_minute, second=0, microsecond=0)
+        remainder = current_minute % self.timeframe
+        if remainder == 0:
+            return now.replace(second=0, microsecond=0) + timedelta(minutes=self.timeframe)
+        next_minute = current_minute - remainder + self.timeframe
+        if next_minute >= 60:
+            return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
+        return now.replace(minute=next_minute, second=0, microsecond=0)
     
     def calculate_minutes_closed(self, latest_time):
         if latest_time is None:
@@ -1044,9 +1148,6 @@ def run_bot():
             time.sleep(REALTIME_POLL_INTERVAL)
 
 if __name__ == "__main__":
-    # Dictionary to store trades
-    active_trades = {}
-    
     logger.info("Launching main application")
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
