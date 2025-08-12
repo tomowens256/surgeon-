@@ -1145,3 +1145,63 @@ def run_bot():
 if __name__ == "__main__":
     logger.info("Launching main application")
     run_bot()
+
+
+
+
+
+# ADD AT THE BOTTOM OF YOUR EXISTING main.py
+
+def run_bot_for_timeframe(timeframe):
+    """Simplified single-timeframe runner"""
+    print(f"\n{'='*50}")
+    print(f"Starting {timeframe} bot in DIRECT mode")
+    print(f"Current directory: {os.getcwd()}")
+    
+    # Initialize bot
+    bot = BotInstance(timeframe)
+    
+    try:
+        # MANUAL MODEL LOADING (no threads)
+        if timeframe == "M5":
+            model_path = os.path.join(MODELS_DIR, MODEL_5M)
+            scaler_path = os.path.join(MODELS_DIR, SCALER_5M)
+        else:
+            model_path = os.path.join(MODELS_DIR, MODEL_15M)
+            scaler_path = os.path.join(MODELS_DIR, SCALER_15M)
+        
+        print(f"Loading model: {model_path}")
+        bot.model = bot.load_model(model_path)
+        print("Model loaded")
+        
+        print(f"Loading scaler: {scaler_path}")
+        bot.scaler = joblib.load(scaler_path)
+        print("Scaler loaded")
+        
+        # CREATE DETECTOR
+        bot.detector = TradingDetector(timeframe, bot.model, bot.scaler)
+        
+        # MANUAL DATA FETCHING
+        bot.detector.data = bot.detector.fetch_initial_candles()
+        if bot.detector.data.empty:
+            raise RuntimeError("Initial candle fetch failed")
+        
+        # MAIN LOOP (SIMPLIFIED)
+        print(f"Starting main loop for {timeframe}")
+        while True:
+            try:
+                last_time = bot.detector.data['time'].max() if not bot.detector.data.empty else None
+                df = fetch_candles(timeframe, last_time)
+                if not df.empty:
+                    bot.detector.update_data(df)
+                    bot.detector.process_signals(0, df.tail(1))
+                time.sleep(5)  # Fixed sleep time
+            except Exception as e:
+                print(f"Main loop error: {e}")
+                time.sleep(10)
+                
+    except Exception as e:
+        error_msg = f"{timeframe} bot failed: {str(e)}"
+        print(error_msg)
+        traceback.print_exc()
+        send_telegram(f"❌ {error_msg}")
