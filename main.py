@@ -39,7 +39,10 @@ try:
 except AttributeError:
     pass
 
-# REST OF YOUR CODE...
+# DISABLE UNNECESSARY LOGGING
+import logging
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+logging.getLogger('ngrok').setLevel(logging.ERROR)
 import sys
 import os
 import time
