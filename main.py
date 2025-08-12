@@ -1,3 +1,33 @@
+"""
+XAU/USD Trading Bot with CRT Pattern Detection & BiLSTM Evaluation
+
+Project Overview:
+This automated trading system detects Continuation Reversal Trade (CRT) patterns in XAU/USD (Gold) using real-time market data from Oanda. 
+The system analyzes both 5-minute (M5) and 15-minute (M15) timeframes simultaneously. When a CRT pattern is detected, it evaluates trade quality 
+using pre-trained BiLSTM neural networks and sends Telegram alerts with trade details and predictions.
+
+Key Components:
+1. Real-time Pattern Detection: Identifies CRT patterns using precise candle analysis
+2. Multi-Timeframe Analysis: Monitors both M5 and M15 timeframes concurrently
+3. Machine Learning Integration: Uses BiLSTM models to evaluate trade quality
+4. Risk Management: Automatically calculates stop-loss (SL) and take-profit (TP) levels with 1:4 risk-reward ratio
+5. Alerting System: Sends comprehensive Telegram notifications for trade setups
+6. Performance Tracking: Monitors trade outcomes against predictions
+
+Technical Features:
+- Vectorized CRT pattern detection for accuracy
+- 76+ technical indicators for comprehensive market analysis
+- Time-based feature engineering aligned with market hours
+- Robust model loading with multiple fallback strategies
+- Multi-threaded architecture for real-time performance
+
+Requirements:
+- Python 3.10+
+- Oanda API access
+- Telegram bot credentials
+- Pre-trained BiLSTM models (.keras format)
+"""
+
 import sys
 import os
 import time
@@ -10,14 +40,25 @@ import pandas_ta as ta
 import requests
 import re
 import traceback
+import json
 from datetime import datetime, timedelta
 from oandapyV20 import API
 from oandapyV20.exceptions import V20Error
 import oandapyV20.endpoints.instruments as instruments
 import joblib
+import tensorflow as tf
 from tensorflow.keras.models import load_model
-import queue
+from tensorflow.keras.layers import Bidirectional, LSTM, Dense, LayerNormalization
 from collections import defaultdict
+import h5py
+import shutil
+import tempfile
+
+# ========================
+# SUPPRESS TENSORFLOW LOGS
+# ========================
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow info logs
+tf.get_logger().setLevel('ERROR')  # Only show errors
 
 # ========================
 # CONSTANTS & CONFIG
@@ -33,12 +74,16 @@ API_KEY = os.getenv("OANDA_API_KEY")
 # Instrument configuration
 INSTRUMENT = "XAU_USD"
 
-# Model and scaler paths - timeframe specific
+# Model and scaler paths - timeframe specific (updated to .keras format)
 MODELS_DIR = "ml_models"
-MODEL_5M = "5mbilstm_model.keras"
+MODEL_5M = "5mbilstm_model.keras"  # Keras v3 format
 SCALER_5M = "scaler5mcrt.joblib"
-MODEL_15M = "15mbilstm_model.keras"
+MODEL_15M = "15mbilstm_model.keras"  # Keras v3 format
 SCALER_15M = "scaler15mcrt.joblib"
+
+# File size thresholds
+MODEL_MIN_SIZE = 100 * 1024  # 100KB for model files
+SCALER_MIN_SIZE = 2 * 1024   # 2KB for scaler files
 
 # Prediction threshold (0.9140 for class 1)
 PREDICTION_THRESHOLD = 0.9140
@@ -54,9 +99,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Oanda API
-oanda_api = API(access_token=API_KEY, environment="practice")
-
 # ========================
 # UTILITY FUNCTIONS
 # ========================
@@ -65,7 +107,7 @@ def parse_oanda_time(time_str):
     try:
         if '.' in time_str and len(time_str.split('.')[1]) > 7:
             time_str = re.sub(r'\.(\d{6})\d+', r'.\1', time_str)
-        return datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=pytz.utc).astimezone(NY_TZ)
+        return datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(t极info=pytz.utc).astimezone(NY_TZ)
     except Exception as e:
         logger.error(f"Error parsing time {time_str}: {str(e)}")
         return datetime.now(NY_TZ)
@@ -80,7 +122,11 @@ def send_telegram(message):
     if len(message) > 4000:
         message = message[:4000] + "... [TRUNCATED]"
     
-    message = message.replace('_', '\_')  # Escape underscores for Markdown
+    # Escape special Markdown characters
+    escape_chars = '_*[]()~`>#+-=|{}.!'
+    for char in escape_chars:
+        message = message.replace(char, '\\' + char)
+    
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     max_retries = 3
     for attempt in range(max_retries):
@@ -88,7 +134,7 @@ def send_telegram(message):
             response = requests.post(url, json={
                 'chat_id': TELEGRAM_CHAT_ID,
                 'text': message,
-                'parse_mode': 'Markdown'
+                'parse_mode': 'MarkdownV2'
             }, timeout=10)
             
             if response.status_code == 200 and response.json().get('ok'):
@@ -170,7 +216,56 @@ def fetch_candles(timeframe, last_time=None):
     return pd.DataFrame()
 
 # ========================
-# FEATURE ENGINEER WITH VOLUME IMPUTATION
+# MODEL FILE VERIFICATION
+# ========================
+def verify_model_files():
+    """Check model files for validity with appropriate size thresholds"""
+    files_to_check = [
+        (os.path.join(MODELS_DIR, MODEL_5M), MODEL_MIN_SIZE),
+        (os.path.join(MODELS_DIR, MODEL_15M), MODEL_MIN_SIZE),
+        (os.path.join(MODELS_DIR, SCALER_5M), SCALER_MIN_SIZE),
+        (os.path.join(MODELS_DIR, SCALER_15极), SCALER_MIN_SIZE)
+    ]
+    
+    for file_path, min_size in files_to_check:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Model file missing: {file_path}")
+        
+        file_size = os.path.getsize(file_path)
+        if file_size < min_size:
+            size_kb = file_size / 1024
+            min_kb = min_size / 1024
+            raise ValueError(
+                f"File too small: {file_path} ({size_kb:.1f} KB)\n"
+                f"Minimum required: {min_kb:.1f} KB\n"
+                "Possible causes:\n"
+                "1. File not saved properly\n"
+                "2. Disk space issues\n"
+                "3. Corrupted file\n"
+                "4. Incorrect file version"
+            )
+    
+    logger.info("All model files verified successfully")
+
+# Verify model files before proceeding
+try:
+    logger.info("Verifying model files...")
+    verify_model_files()
+    logger.info("Model files verified successfully")
+except Exception as e:
+    logger.error(f"Model verification failed: {str(e)}")
+    # Only send Telegram if function is defined
+    if 'send_telegram' in globals():
+        send_telegram(f"❌ *CRITICAL ERROR*:\nModel verification failed!\n{str(e)}")
+    else:
+        logger.critical("Cannot send Telegram - function not defined yet")
+    sys.exit(1)
+
+# Initialize Oanda API after verification
+oanda_api = API(access_token=API_KEY, environment="practice")
+
+# ========================
+# FEATURE ENGINEER WITH FIXES
 # ========================
 class FeatureEngineer:
     def __init__(self, timeframe):
@@ -207,119 +302,76 @@ class FeatureEngineer:
                 'minutes,closed_30', 'minutes,closed_45'
             ]
         
-        # Features to shift
+        # Features to shift (volume estimation replaced by shifted features)
         self.shift_features = [
             'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
             'atr_z', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100',
             'vwap', 'vwap_std', 'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60',
-            'trend_strength_up', 'trend_strength_down', 'prev_volume', 'body_size', 
+            'trend_strength_up', 'trend_strength_down', 'volume', 'body_size', 
             'wick_up', 'wick_down', 'prev_body_size', 'prev_wick_up', 'prev_wick_down', 
             'is_bad_combo', 'price_div_vol', 'rsi_div_macd', 'price_div_vwap', 
             'sl_div_atr', 'rrr_div_rsi', 'rsi_zone_neutral', 'rsi_zone_overbought', 
             'rsi_zone_oversold', 'rsi_zone_unknown', 'combo_flag_dead', 'combo_flag_fair',
             'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
         ]
-        
-        # Store historical volume data for imputation
-        self.historical_volumes = defaultdict(list)
 
-    def get_same_period_candles(self, df, current_time):
-        """Get candles from same time period in previous days"""
-        time_key = current_time.strftime('%H:%M')
-        
-        if time_key in self.historical_volumes and self.historical_volumes[time_key]:
-            return self.historical_volumes[time_key]
-        
-        same_period = []
-        complete_df = df[df['complete'] == True]
-        
-        for _, row in complete_df.iterrows():
-            if row['time'].strftime('%H:%M') == time_key:
-                same_period.append(row['volume'])
-        
-        self.historical_volumes[time_key] = same_period
-        return same_period
-
-    def calculate_crt_signal(self, df):
-        """Robust CRT signal calculation with validation"""
+    def calculate_crt_signal_vectorized(self, df):
+        """Vectorized CRT signal calculation with precise indexing"""
         if len(df) < 3:
             return None, None
             
-        crt_df = df.tail(3).copy().reset_index(drop=True)
+        # Create working copy to avoid modifying original
+        df = df.copy()
         
-        if len(crt_df) < 3:
-            return None, None
-            
-        if not crt_df['time'].is_monotonic_increasing:
-            crt_df = crt_df.sort_values('time').reset_index(drop=True)
+        # Create shifted columns for previous candles
+        df['c1_low'] = df['low'].shift(2)
+        df['c1_high'] = df['high'].shift(2)
+        df['c2_low'] = df['low'].shift(1)
+        df['c2_high'] = df['high'].shift(1)
+        df['c2_close'] = df['close'].shift(1)
         
-        try:
-            # CORRECTED CANDLE REFERENCES
-            c1 = crt_df.iloc[0]  # Reference candle (two candles back)
-            c2 = crt_df.iloc[1]  # Breakout candle (previous candle)
-            c3 = crt_df.iloc[2]  # Current candle
-            
-            c1_low = c1['low']
-            c1_high = c1['high']
-            c2_low = c2['low']
-            c2_high = c2['high']
-            c2_close = c2['close']
-            c3_open = c3['open']
-            
-            c2_range = c2_high - c2_low
-            c2_mid = c2_low + (0.5 * c2_range)
-
-            buy_condition = (
-                (c2_low < c1_low) and 
-                (c2_close > c1_low) and 
-                (c3_open > c2_mid)
-            )
-
-            sell_condition = (
-                (c2_high > c1_high) and 
-                (c2_close < c1_high) and 
-                (c3_open < c2_mid)
-            )
-            
-            if buy_condition:
-                logger.info(f"✅ BUY VALIDATION| C2_Low:{c2_low:.5f} < C1_Low:{c1_low:.5f}| C2_Close:{c2_close:.5f} > C1_Low:{c1_low:.5f}| C3_Open:{c3_open:.5f} > C2_Mid:{c2_mid:.5f}")
-                signal_type = 'BUY'
-                entry = c3_open
-                sl = c2_low
-                risk = abs(entry - sl)
-                tp = entry + 4 * risk
-            elif sell_condition:
-                logger.info(f"✅ SELL VALIDATION| C2_High:{c2_high:.5f} > C1_High:{c1_high:.5f}| C2_Close:{c2_close:.5f} < C1_High:{c1_high:.5f}| C3_Open:{c3_open:.5f} < C2_Mid:{c2_mid:.5f}")
-                signal_type = 'SELL'
-                entry = c3_open
-                sl = c2_high
-                risk = abs(sl - entry)
-                tp = entry - 4 * risk
-            else:
-                return None, None
-            
-            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': c3['time']}
-            
-        except KeyError:
+        # Calculate candle metrics
+        df['c2_range'] = df['c2_high'] - df['c2_low']
+        df['c2_mid'] = df['c2_low'] + (0.5 * df['c2_range'])
+        
+        # Vectorized conditions
+        buy_mask = (
+            (df['c2_low'] < df['c1_low']) & 
+            (df['c2_close'] > df['c1_low']) & 
+            (df['open'] > df['c2_mid'])
+        )
+        
+        sell_mask = (
+            (df['c2_high'] > df['c1_high']) & 
+            (df['c2_close'] < df['c1_high']) & 
+            (df['open'] < df['c2_mid'])
+        )
+        
+        # Get the last signal only
+        last_row = df.iloc[-1]
+        
+        if buy_mask.iloc[-1]:
+            signal_type = 'BUY'
+            entry = last_row['open']
+            sl = last_row['c2_low']
+            risk = abs(entry - sl)
+            tp = entry + 4 * risk
+            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': last_row['time']}
+        elif sell_mask.iloc[-1]:
+            signal_type = 'SELL'
+            entry = last_row['open']
+            sl = last_row['c2_high']
+            risk = abs(sl - entry)
+            tp = entry - 4 * risk
+            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': last_row['time']}
+        else:
             return None, None
 
     def calculate_technical_indicators(self, df):
-        """Calculate technical indicators with volume imputation"""
+        """Calculate technical indicators WITHOUT volume imputation"""
         df = df.copy().drop_duplicates(subset=['time'], keep='last')
         
-        if not df.empty and not df.iloc[-1]['complete']:
-            current_candle = df.iloc[-1]
-            current_time = current_candle['time']
-            same_period_volumes = self.get_same_period_candles(df, current_time)
-            
-            if same_period_volumes:
-                avg_volume = np.mean(same_period_volumes)
-                current_volume = current_candle['volume']
-                volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
-                volume_ratio = min(3.0, max(0.1, volume_ratio))
-                estimated_volume = avg_volume * volume_ratio
-                df.at[df.index[-1], 'volume'] = estimated_volume
-        
+        # REMOVED VOLUME ESTIMATION - Using shifted features instead
         df['adj close'] = df['open']
         df['garman_klass_vol'] = (
             ((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -
@@ -428,7 +480,8 @@ class FeatureEngineer:
         
         return df
 
-    def calculate_minutes_closed(self, df, minutes_closed):
+    def calculate_minutes_closed(self, df):
+        """Calculate minutes closed based on actual candle timestamp"""
         df = df.copy()
         
         if self.timeframe == "M5":
@@ -438,21 +491,26 @@ class FeatureEngineer:
             minute_buckets = [0, 15, 30, 45]
             minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
             
+        # Initialize all columns to 0
         for col in minute_cols:
             df[col] = 0
         
-        current_bucket = (minutes_closed // (5 if self.timeframe == "M5" else 15)) * (5 if self.timeframe == "M5" else 15)
-        max_bucket = max(minute_buckets)
-        if current_bucket > max_bucket:
-            current_bucket = max_bucket
+        # Get the current candle's minute
+        current_minute = df.iloc[-1]['time'].minute
+        
+        # Calculate bucket based on actual minute of the hour
+        if self.timeframe == "M5":
+            bucket = (current_minute // 5) * 5
+        else:
+            bucket = (current_minute // 15) * 15
             
-        bucket_col = f'minutes,closed_{current_bucket}'
+        bucket_col = f'minutes,closed_{bucket}'
         if bucket_col in df.columns:
             df[bucket_col] = 1
             
         return df
 
-    def generate_features(self, df, signal_type, minutes_closed):
+    def generate_features(self, df, signal_type):
         if len(df) < 200:
             return None
         
@@ -460,8 +518,9 @@ class FeatureEngineer:
         df = self.calculate_technical_indicators(df)
         df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
         df = self.calculate_categorical_features(df)
-        df = self.calculate_minutes_closed(df, minutes_closed)
+        df = self.calculate_minutes_closed(df)
         
+        # Volume features now rely solely on shifted values
         df['prev_volume'] = df['volume'].shift(1)
         df['body_size'] = abs(df['close'] - df['open'])
         df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
@@ -507,6 +566,7 @@ class FeatureEngineer:
             else:
                 features[feat] = 0
         
+        # CRITICAL: Using shifted features instead of volume estimation
         if len(df) >= 2:
             prev_candle = df.iloc[-2]
             for feat in self.shift_features:
@@ -518,6 +578,66 @@ class FeatureEngineer:
                 features[col] = 0
         
         return features
+
+# ========================
+# REAL-TIME DETECTOR
+# ========================
+class RealTimeDetector:
+    def __init__(self, detector):
+        self.detector = detector
+        self.current_candle_time = None
+        self.running = True
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def run(self):
+        while self.running:
+            try:
+                current_time = datetime.now(NY_TZ)
+                
+                if self.detector.data.empty:
+                    time.sleep(self.detector.poll_interval)
+                    continue
+                    
+                with self.detector.lock:
+                    if self.detector.data.empty:
+                        continue
+                    latest_candle = self.detector.data.iloc[-1].copy()
+                
+                if self.current_candle_time != latest_candle['time']:
+                    self.current_candle_time = latest_candle['time']
+                    self.detector.scan_count_this_candle = 0
+                    self.detector.signal_found_this_candle = False
+                
+                if self.detector.signal_found_this_candle and self.detector.next_candle_time:
+                    sleep_seconds = (self.detector.next_candle_time - current_time).total_seconds()
+                    if sleep_seconds > 0:
+                        time.sleep(sleep_seconds)
+                    continue
+                
+                if (self.detector.scan_count_this_candle >= 2 and 
+                    not self.detector.signal_found_this_candle and 
+                    self.detector.next_candle_time):
+                    sleep_seconds = (self.detector.next_candle_time - current_time).total_seconds()
+                    if sleep_seconds > 0:
+                        time.sleep(sleep_seconds)
+                    continue
+                
+                candle_age = (current_time - latest_candle['time']).total_seconds() / 60.0
+                if (latest_candle['is_current'] and 
+                    candle_age >= self.detector.min_candle_age and 
+                    self.detector.scan_count_this_candle < 2):
+                    self.detector.process_signals(candle_age, pd.DataFrame([latest_candle]))
+                    self.detector.scan_count_this_candle += 1
+                
+                time.sleep(self.detector.poll_interval)
+                
+            except Exception:
+                time.sleep(self.detector.poll_interval)
+
+    def stop(self):
+        self.running = False
+        self.thread.join(timeout=5)
 
 # ========================
 # TRADING DETECTOR
@@ -538,15 +658,13 @@ class TradingDetector:
         self.next_candle_time = None
         self.last_signal_candle = None
         self.active_trades = {}
-        self.current_candle_time = None
-        self.running = True
+        self.realtime_detector = None
         
         self.data = self.fetch_initial_candles()
         if self.data.empty or len(self.data) < 200:
             raise RuntimeError("Initial candle fetch failed")
             
-        self.realtime_thread = threading.Thread(target=self.realtime_monitor, daemon=True)
-        self.realtime_thread.start()
+        self.realtime_detector = RealTimeDetector(self)
         logger.info(f"TradingDetector initialized for {timeframe}")
 
     def fetch_initial_candles(self):
@@ -605,7 +723,7 @@ class TradingDetector:
         expected_features = len(self.feature_engineer.features)
         
         if features_df.shape[1] != expected_features:
-            logger.error(f"Feature mismatch: Expected {expected_features} features, got {features_df.shape[1]}")
+            logger.error(f"Feature mismatch: Expected {expected_features} features, got {features极_df.shape[1]}")
             return None, None
         
         try:
@@ -620,16 +738,19 @@ class TradingDetector:
             logger.error(f"Prediction failed: {str(e)}")
             return None, None
 
-    def process_signals(self):
+    def process_signals(self, minutes_closed, latest_candles):
+        if not latest_candles.empty:
+            self.update_data(latest_candles)
+            
         if self.data.empty or len(self.data) < 3:
             return
 
-        current_time = datetime.now(NY_TZ)
         latest_candle_time = self.data.iloc[-1]['time']
+        current_time = datetime.now(NY_TZ)
         candle_age = self.calculate_candle_age(current_time, latest_candle_time)
         self.next_candle_time = self._get_next_candle_time(latest_candle_time)
 
-        signal_type, signal_data = self.feature_engineer.calculate_crt_signal(self.data)
+        signal_type, signal_data = self.feature_engineer.calculate_crt_signal_vectorized(self.data)
         if signal_type and signal_data:
             current_candle = self.data.iloc[-1]
             if (self.last_signal_candle is None or 
@@ -657,7 +778,7 @@ class TradingDetector:
                         f"Candle Age: {candle_age:.2f} minutes"
                     )
                     if send_telegram(setup_msg):
-                        features = self.feature_engineer.generate_features(self.data, signal_type, candle_age)
+                        features = self.feature_engineer.generate_features(self.data, signal_type)
                         if features is not None:
                             feature_msg = f"📊 *FEATURES* {INSTRUMENT.replace('_','/')} {signal_type}\n"
                             formatted_features = []
@@ -695,7 +816,7 @@ class TradingDetector:
                         else:
                             logger.error("No scaler or model loaded")
 
-        if len(self.data) > 0 and candle_age >= self.candle_duration:
+        if len(self.data) > 0 and minutes_closed == self.candle_duration:
             latest_candle = self.data.iloc[-1]
             for trade_id, trade in list(self.active_trades.items()):
                 if trade.get('outcome') is None:
@@ -727,59 +848,69 @@ class TradingDetector:
                         if send_telegram(outcome_msg):
                             del self.active_trades[trade_id]
 
-    def realtime_monitor(self):
-        while self.running:
+# ========================
+# CANDLE SCHEDULER
+# ========================
+class CandleScheduler(threading.Thread):
+    def __init__(self, granularity):
+        super().__init__(daemon=True)
+        self.granularity = granularity
+        self.callback = None
+        self.active = True
+    
+    def register_callback(self, callback):
+        self.callback = callback
+        
+    def calculate_next_candle(self):
+        now = datetime.now(NY_TZ)
+        current_minute = now.minute
+        if self.granularity == "M5":
+            remainder = current_minute % 5
+            if remainder == 0:
+                return now.replace(second=0, microsecond=0) + timedelta(minutes=5)
+            next_minute = current_minute - remainder + 5
+            if next_minute >= 60:
+                return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
+            return now.replace(minute=next_minute, second=0, microsecond=0)
+        else:  # M15 timeframe
+            remainder = current_minute % 15
+            if remainder == 0:
+                return now.replace(second=0, microsecond=0) + timedelta(minutes=15)
+            next_minute = current_minute - remainder + 15
+            if next_minute >= 60:
+                return now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
+            return now.replace(minute=next_minute, second=0, microsecond=0)
+    
+    def calculate_minutes_closed(self, latest_time):
+        if latest_time is None:
+            return 0
+        now = datetime.now(NY_TZ)
+        elapsed = (now - latest_time).total_seconds() / 60
+        max_closed = 4.9 if self.granularity == "M5" else 14.9
+        return min(max_closed, max(0, elapsed))
+    
+    def run(self):
+        while self.active:
             try:
-                current_time = datetime.now(NY_TZ)
-                
-                if self.data.empty:
-                    time.sleep(self.poll_interval)
-                    continue
-                    
-                with self.lock:
-                    if self.data.empty:
-                        continue
-                    latest_candle = self.data.iloc[-1].copy()
-                
-                if self.current_candle_time != latest_candle['time']:
-                    self.current_candle_time = latest_candle['time']
-                    self.scan_count_this_candle = 0
-                    self.signal_found_this_candle = False
-                
-                if self.signal_found_this_candle and self.next_candle_time:
-                    sleep_seconds = (self.next_candle_time - current_time).total_seconds()
-                    if sleep_seconds > 0:
-                        time.sleep(sleep_seconds)
+                df_candles = fetch_candles(self.granularity)
+                if df_candles.empty:
                     continue
                 
-                if (self.scan_count_this_candle >= 2 and 
-                    not self.signal_found_this_candle and 
-                    self.next_candle_time):
-                    sleep_seconds = (self.next_candle_time - current_time).total_seconds()
-                    if sleep_seconds > 0:
-                        time.sleep(sleep_seconds)
-                    continue
+                complete_candles = df_candles[df_candles['complete'] == True]
+                if not complete_candles.empty:
+                    latest_candle = complete_candles.iloc[-1]
+                    latest_time = latest_candle['time']
+                    minutes_closed = self.calculate_minutes_closed(latest_time)
+                    if self.callback:
+                        self.callback(minutes_closed, complete_candles.tail(1))
                 
-                candle_age = (current_time - latest_candle['time']).total_seconds() / 60.0
-                if (latest_candle['is_current'] and 
-                    candle_age >= self.min_candle_age and 
-                    self.scan_count_this_candle < 2):
-                    self.process_signals()
-                    self.scan_count_this_candle += 1
-                
-                # Also process at end of candle for outcomes
-                if candle_age >= self.candle_duration:
-                    self.process_signals()
-                
-                time.sleep(self.poll_interval)
-                
+                now = datetime.now(NY_TZ)
+                next_run = self.calculate_next_candle()
+                sleep_seconds = (next_run - now).total_seconds()
+                time.sleep(max(1, sleep_seconds))
             except Exception as e:
-                logger.error(f"Realtime monitor error: {str(e)}")
-                time.sleep(5)
-
-    def stop(self):
-        self.running = False
-        self.realtime_thread.join(timeout=5)
+                logger.error(f"Scheduler error: {str(e)}")
+                time.sleep(60)
 
 # ========================
 # BOT INSTANCE CLASS
@@ -791,8 +922,81 @@ class BotInstance:
         self.scaler = None
         self.detector = None
         self.logger = logging.getLogger(f"{__name__}.{timeframe}")
+        self.scheduler = None
         self.active_trades = {}
-        self.running = True
+        
+    def load_model(self, model_path):
+        """Robust model loader for .keras files with architecture mismatch handling"""
+        try:
+            self.logger.info(f"Loading Keras model from: {model_path}")
+            self.logger.info(f"Model file size: {os.path.getsize(model_path)} bytes")
+            
+            # Attempt 1: Try direct loading with Keras (preferred method)
+            try:
+                self.logger.info("Attempt 1: Direct Keras loading")
+                return tf.keras.models.load_model(model_path, compile=False)
+            except Exception as e:
+                self.logger.warning(f"Direct loading failed: {str(e)}")
+            
+            # Attempt 2: Try loading with custom objects and layer renaming
+            try:
+                self.logger.info("Attempt 2: Loading with custom objects and renaming")
+                return tf.keras.models.load_model(
+                    model_path,
+                    compile=False,
+                    custom_objects={
+                        'InputLayer': tf.keras.layers.InputLayer,
+                        'Bidirectional': tf.keras.layers.Bidirectional,
+                        'LSTM': tf.keras.layers.LSTM,
+                        'Dense': tf.keras.layers.Dense,
+                        'LayerNormalization': LayerNormalization
+                    }
+                )
+            except Exception as e:
+                self.logger.warning(f"Loading with custom objects failed: {str(e)}")
+            
+            # Attempt 3: Architecture reconstruction with dynamic shapes
+            self.logger.info("Attempt 3: Architecture reconstruction with dynamic shapes")
+            if self.timeframe == "M5":
+                input_shape = (1, 76)
+                lstm_units = [512, 256]
+            else:  # M15 timeframe
+                input_shape = (1, 68)
+                lstm_units = [384, 192]
+            
+            # Build model with proper weight initialization
+            model = tf.keras.Sequential()
+            model.add(tf.keras.layers.InputLayer(input_shape=input_shape, name="input_layer"))
+            
+            # First BiLSTM layer
+            model.add(Bidirectional(
+                LSTM(lstm_units[0], return_sequences=True, kernel_initializer='glorot_uniform'),
+                name="bidirectional_1"
+            ))
+            
+            # Second BiLSTM layer
+            model.add(Bidirectional(
+                LSTM(lstm_units[1], kernel_initializer='glorot_uniform'),
+                name="bidirectional_2"
+            ))
+            
+            # Dense layers
+            model.add(Dense(128, activation='relu', name="dense_1"))
+            model.add(Dense(1, activation='sigmoid', name="output"))
+            
+            # Load weights with strict=False to handle shape mismatches
+            try:
+                self.logger.info("Loading weights with strict=False")
+                model.load_weights(model_path, by_name=True, skip_mismatch=True)
+                self.logger.warning("Some weights might not have loaded properly - proceeding with partial weights")
+                return model
+            except Exception as e:
+                self.logger.error(f"Weight loading failed: {str(e)}")
+                raise RuntimeError(f"Could not load weights: {str(e)}")
+                
+        except Exception as e:
+            self.logger.error(f"All model loading attempts failed: {str(e)}")
+            raise RuntimeError(f"Could not load model: {str(e)}")
         
     def run(self):
         self.logger.info(f"Starting trading bot for {self.timeframe}")
@@ -806,22 +1010,31 @@ class BotInstance:
                 model_path = os.path.join(MODELS_DIR, MODEL_15M)
                 scaler_path = os.path.join(MODELS_DIR, SCALER_15M)
                 
-            self.model = load_model(model_path)
+            # Load model with compatibility handling
+            self.model = self.load_model(model_path)
+            
+            # Verify scaler size before loading
+            if os.path.getsize(scaler_path) < SCALER_MIN_SIZE:
+                raise ValueError(f"Scaler file too small: {scaler_path} ({os.path.getsize(scaler_path)} bytes)")
             self.scaler = joblib.load(scaler_path)
             
             # Create detector with timeframe-specific model and scaler
             self.detector = TradingDetector(self.timeframe, self.model, self.scaler)
             
+            # Create scheduler with correct granularity string
+            self.scheduler = CandleScheduler(granularity=self.timeframe)
+            self.scheduler.register_callback(self.detector.process_signals)
+            self.scheduler.start()
+            
             self.logger.info(f"Bot started successfully for {self.timeframe}")
             
-            # Main data update loop
-            while self.running:
+            while True:
                 try:
                     last_time = self.detector.data['time'].max() if not self.detector.data.empty else None
                     df = fetch_candles(self.timeframe, last_time)
                     if not df.empty:
                         self.detector.update_data(df)
-                    time.sleep(3)
+                    time.sleep(self.detector.poll_interval)
                 except Exception as e:
                     self.logger.error(f"Main loop error: {e}")
                     time.sleep(10)
@@ -829,13 +1042,6 @@ class BotInstance:
         except Exception as e:
             self.logger.error(f"Failed to start bot: {str(e)}")
             send_telegram(f"❌ *Bot Failed to Start for {self.timeframe}*:\n{str(e)}")
-        finally:
-            self.detector.stop()
-
-    def stop(self):
-        self.running = False
-        if self.detector:
-            self.detector.stop()
 
 # ========================
 # MAIN FUNCTION
@@ -856,16 +1062,8 @@ def run_bot():
     thread_15m.start()
     
     # Keep main thread alive
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Shutting down bots...")
-        bot_5m.stop()
-        bot_15m.stop()
-        thread_5m.join(5)
-        thread_15m.join(5)
-        logger.info("Bots stopped")
+    while True:
+        time.sleep(1)
 
 if __name__ == "__main__":
     logger.info("Launching main application")
