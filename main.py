@@ -931,6 +931,8 @@ class CandleScheduler(threading.Thread):
                 logger.error(f"Scheduler error: {str(e)}")
                 time.sleep(60)
 
+# ... (all your existing imports and code above the BotInstance class remain unchanged) ...
+
 # ========================
 # BOT INSTANCE CLASS
 # ========================
@@ -1026,7 +1028,7 @@ class BotInstance:
                 model_path = os.path.join(MODELS_DIR, MODEL_5M)
                 scaler_path = os.path.join(MODELS_DIR, SCALER_5M)
             else:  # M15 timeframe
-                model_path = os.path.join(MODELS_DIR, MODEL_15M)
+                model极ath = os.path.join(MODELS_DIR, MODEL_15M)
                 scaler_path = os.path.join(MODELS_DIR, SCALER_15M)
                 
             # Load model with compatibility handling
@@ -1063,7 +1065,18 @@ class BotInstance:
             send_telegram(f"❌ *Bot Failed to Start for {self.timeframe}*:\n{str(e)}")
 
 # ========================
-# MAIN FUNCTION
+# NEW FUNCTION FOR RUNNING BY TIMEFRAME
+# ========================
+def run_bot_for_timeframe(timeframe):
+    """Run bot for a specific timeframe"""
+    logger.info(f"Starting trading bot for {timeframe}")
+    send_telegram(f"🚀 *Bot Started*\nInstrument: {INSTRUMENT}\nTimeframe: {timeframe}\nTime: {datetime.now(NY_TZ)}")
+    
+    bot = BotInstance(timeframe)
+    bot.run()
+
+# ========================
+# MAIN FUNCTION FOR STANDALONE EXECUTION
 # ========================
 def run_bot():
     # Start both timeframe bots in parallel
