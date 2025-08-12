@@ -27,7 +27,19 @@ Requirements:
 - Telegram bot credentials
 - Pre-trained BiLSTM models (.keras format)
 """
+# COMPATIBILITY FIXES
+import os
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 
+# NUMPY FIX
+import numpy as np
+try:
+    np.float = float  # Fix for TensorFlow 2.x
+except AttributeError:
+    pass
+
+# REST OF YOUR CODE...
 import sys
 import os
 import time
