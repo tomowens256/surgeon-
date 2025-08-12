@@ -122,7 +122,7 @@ def parse_oanda_time(time_str):
     try:
         if '.' in time_str and len(time_str.split('.')[1]) > 7:
             time_str = re.sub(r'\.(\d{6})\d+', r'.\1', time_str)
-        return datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(t极info=pytz.utc).astimezone(NY_TZ)
+        return datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=pytz.utc).astimezone(NY_TZ)
     except Exception as e:
         logger.error(f"Error parsing time {time_str}: {str(e)}")
         return datetime.now(NY_TZ)
@@ -239,7 +239,7 @@ def verify_model_files():
         (os.path.join(MODELS_DIR, MODEL_5M), MODEL_MIN_SIZE),
         (os.path.join(MODELS_DIR, MODEL_15M), MODEL_MIN_SIZE),
         (os.path.join(MODELS_DIR, SCALER_5M), SCALER_MIN_SIZE),
-        (os.path.join(MODELS_DIR, SCALER_15极), SCALER_MIN_SIZE)
+        (os.path.join(MODELS_DIR, SCALER_15), SCALER_MIN_SIZE)
     ]
     
     for file_path, min_size in files_to_check:
