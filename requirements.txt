@@ -1,5 +1,5 @@
 # REPLACE YOUR requirements.txt WITH THIS:
-cat <<EOF > requirements.txt
+#cat <<EOF > requirements.txt
 tensorflow==2.16.1
 pandas==2.2.2  # Matches Colab's version
 pandas_ta==0.3.14b0
