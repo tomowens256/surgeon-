@@ -224,7 +224,10 @@ def fetch_candles(timeframe, last_time=None):
             return df
             
         except V20Error as e:
-            if "rate" in str(e).lower() or e.status == 502:
+            
+            status_code = getattr(e, "code", None)
+            if "rate" in str(e).lower() or status_code == 502:
+
                 wait_time = sleep_time * (2 ** attempt)
                 time.sleep(wait_time)
             else:
