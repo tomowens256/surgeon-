@@ -168,7 +168,7 @@ def send_telegram(message):
     return False
 
 def fetch_candles(timeframe, last_time=None):
-    """Fetch exactly 201 candles for XAU_USD with full precision"""
+    """Fetch exactly 201 candles for XAU_USD with full precision and robust error handling"""
     logger.info(f"Fetching 201 candles for {INSTRUMENT} with timeframe {timeframe}")
     params = {
         "granularity": timeframe,
@@ -190,6 +190,7 @@ def fetch_candles(timeframe, last_time=None):
             candles = response.get('candles', [])
             
             if not candles:
+                logger.warning(f"No candles received on attempt {attempt+1}")
                 continue
             
             data = []
@@ -212,10 +213,12 @@ def fetch_candles(timeframe, last_time=None):
                         'complete': is_complete,
                         'is_current': not is_complete
                     })
-                except Exception:
+                except Exception as e:
+                    logger.error(f"Error parsing candle: {str(e)}")
                     continue
             
             if not data:
+                logger.warning(f"Empty data after parsing on attempt {attempt+1}")
                 continue
                 
             df = pd.DataFrame(data).drop_duplicates(subset=['time'], keep='last')
@@ -224,17 +227,22 @@ def fetch_candles(timeframe, last_time=None):
             return df
             
         except V20Error as e:
-            
-            status_code = getattr(e, "code", None)
-            if "rate" in str(e).lower() or status_code == 502:
-
+            # FIXED ERROR HANDLING: Use e.code instead of e.status
+            if "rate" in str(e).lower() or getattr(e, 'code', 0) in [429, 502]:
                 wait_time = sleep_time * (2 ** attempt)
+                logger.warning(f"Rate limit hit, waiting {wait_time}s: {str(e)}")
                 time.sleep(wait_time)
             else:
-                logger.error(f"Oanda API error: {str(e)}")
+                error_details = f"Status: {getattr(e, 'code', 'N/A')} | Message: {getattr(e, 'msg', str(e))}"
+                logger.error(f"❌ Oanda API error: {error_details}")
+                break  # Break on non-rate limit errors
+                
         except Exception as e:
-            logger.error(f"Unexpected error fetching candles: {str(e)}")
+            logger.error(f"❌ General error fetching candles: {str(e)}")
+            logger.error(traceback.format_exc())
+            time.sleep(sleep_time)
     
+    logger.error(f"Failed to fetch candles after {max_attempts} attempts")
     return pd.DataFrame()
 
 # ========================
