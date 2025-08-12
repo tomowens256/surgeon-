@@ -242,7 +242,7 @@ def verify_model_files():
         (os.path.join(MODELS_DIR, MODEL_5M), MODEL_MIN_SIZE),
         (os.path.join(MODELS_DIR, MODEL_15M), MODEL_MIN_SIZE),
         (os.path.join(MODELS_DIR, SCALER_5M), SCALER_MIN_SIZE),
-        (os.path.join(MODELS_DIR, SCALER_15), SCALER_MIN_SIZE)
+        (os.path.join(MODELS_DIR, SCALER_15M), SCALER_MIN_SIZE)
     ]
     
     for file_path, min_size in files_to_check:
