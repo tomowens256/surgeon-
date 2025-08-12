@@ -1,4 +1,7 @@
-"""
+import os
+
+# Kill any process using port 5000 before starting
+os.system("fuser -k 5000/tcp > /dev/null 2>&1")"""
 XAU/USD Trading Bot with CRT Pattern Detection & BiLSTM Evaluation
 
 Project Overview:
