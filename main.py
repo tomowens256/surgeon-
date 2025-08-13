@@ -33,7 +33,7 @@ from oandapyV20.exceptions import V20Error
 import oandapyV20.endpoints.instruments as instruments
 import tensorflow as tf
 from google.colab import drive
-from IPython.display import clear_output  # FIXED: Added import
+from IPython.display import clear_output
 
 # ========================
 # SUPPRESS TENSORFLOW LOGS
@@ -46,6 +46,7 @@ tf.get_logger().setLevel('ERROR')  # Only show errors
 # ========================
 NY_TZ = pytz.timezone("America/New_York")
 MODELS_DIR = "/content/drive/MyDrive/ml_models"  # Colab-specific path
+DEBUG_MODE = True  # Enable detailed debugging
 
 # File size thresholds
 MODEL_MIN_SIZE = 100 * 1024  # 100KB for model files
@@ -54,11 +55,15 @@ SCALER_MIN_SIZE = 2 * 1024   # 2KB for scaler files
 # Prediction threshold (0.9140 for class 1)
 PREDICTION_THRESHOLD = 0.9140
 
-# Initialize logging
+# Initialize logging with more verbosity
+log_format = '%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s'
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    level=logging.DEBUG if DEBUG_MODE else logging.INFO,
+    format=log_format,
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('trading_bot_debug.log')
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -67,21 +72,22 @@ logger = logging.getLogger(__name__)
 # ========================
 def setup_colab():
     """Mount Drive and install packages"""
+    logger.debug("Mounting Google Drive...")
     drive.mount('/content/drive')
-    clear_output()  # Cleaner Colab interface
+    logger.debug("Google Drive mounted successfully")
     
     # Configure logging
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.DEBUG if DEBUG_MODE else logging.INFO,
+        format=log_format,
         handlers=[logging.StreamHandler()]
     )
-    logger = logging.getLogger(__name__)
     
     # Set TensorFlow logging level
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
     tf.get_logger().setLevel('ERROR')
     
+    logger.info("Colab setup completed")
     return logger
 
 # ========================
@@ -99,11 +105,12 @@ def parse_oanda_time(time_str):
 
 def send_telegram(message, token, chat_id):
     """Send formatted message to Telegram with detailed error handling and retries"""
+    logger.debug(f"Attempting to send Telegram message: {message[:50]}...")
+    
     if not token or not chat_id:
         logger.error("Telegram credentials missing")
         return False
         
-    logger.info(f"Attempting to send Telegram message: {message}")
     if len(message) > 4000:
         message = message[:4000] + "... [TRUNCATED]"
     
@@ -114,15 +121,23 @@ def send_telegram(message, token, chat_id):
     
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     max_retries = 3
+    
+    logger.debug(f"Telegram URL: {url.split('bot')[0]}bot***")
+    logger.debug(f"Chat ID: {chat_id}")
+    
     for attempt in range(max_retries):
         try:
+            logger.debug(f"Telegram attempt {attempt+1}/{max_retries}")
             response = requests.post(url, json={
                 'chat_id': chat_id,
                 'text': message,
                 'parse_mode': 'MarkdownV2'
             }, timeout=10)
             
+            logger.debug(f"Telegram response: {response.status_code}, {response.text[:100]}")
+            
             if response.status_code == 200 and response.json().get('ok'):
+                logger.info("Telegram message sent successfully")
                 return True
             else:
                 error_msg = f"Telegram error {response.status_code}"
@@ -138,11 +153,12 @@ def send_telegram(message, token, chat_id):
 
 def fetch_candles(timeframe, last_time=None, api_key=None):
     """Fetch exactly 201 candles for XAU_USD with full precision and robust error handling"""
+    logger.debug(f"Fetching candles for {timeframe}, last_time: {last_time}")
+    
     if not api_key:
         logger.error("Oanda API key missing")
         return pd.DataFrame()
         
-    logger.info(f"Fetching 201 candles for XAU_USD with timeframe {timeframe}")
     try:
         api = API(access_token=api_key, environment="practice")
     except Exception as e:
@@ -152,9 +168,9 @@ def fetch_candles(timeframe, last_time=None, api_key=None):
     params = {
         "granularity": timeframe,
         "count": 201,
-        "price": "M",  # Mid prices with full precision
-        "alignmentTimezone": "America/New_York",  # Ensure proper time alignment
-        "includeCurrent": True  # Include incomplete current candle
+        "price": "M",
+        "alignmentTimezone": "America/New_York",
+        "includeCurrent": True
     }
     if last_time:
         params["from"] = last_time.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -162,11 +178,16 @@ def fetch_candles(timeframe, last_time=None, api_key=None):
     sleep_time = 10
     max_attempts = 5
     
+    logger.debug(f"Oanda request params: {params}")
+    
     for attempt in range(max_attempts):
         try:
+            logger.debug(f"Fetch attempt {attempt+1}/{max_attempts}")
             request = instruments.InstrumentsCandles(instrument="XAU_USD", params=params)
             response = api.request(request)
             candles = response.get('candles', [])
+            
+            logger.debug(f"Received {len(candles)} candles")
             
             if not candles:
                 logger.warning(f"No candles received on attempt {attempt+1}")
@@ -203,6 +224,8 @@ def fetch_candles(timeframe, last_time=None, api_key=None):
             df = pd.DataFrame(data).drop_duplicates(subset=['time'], keep='last')
             if last_time:
                 df = df[df['time'] > last_time].sort_values('time')
+                
+            logger.debug(f"Returning {len(df)} candles")
             return df
             
         except V20Error as e:
@@ -213,7 +236,7 @@ def fetch_candles(timeframe, last_time=None, api_key=None):
             else:
                 error_details = f"Status: {getattr(e, 'code', 'N/A')} | Message: {getattr(e, 'msg', str(e))}"
                 logger.error(f"❌ Oanda API error: {error_details}")
-                break  # Break on non-rate limit errors
+                break
                 
         except Exception as e:
             logger.error(f"❌ General error fetching candles: {str(e)}")
@@ -229,6 +252,7 @@ def fetch_candles(timeframe, last_time=None, api_key=None):
 class FeatureEngineer:
     def __init__(self, timeframe):
         self.timeframe = timeframe
+        logger.debug(f"Initializing FeatureEngineer for {timeframe}")
         # Base features without minute dummies
         self.base_features = [
             'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
@@ -301,7 +325,7 @@ class FeatureEngineer:
         )
         
         sell_mask = (
-            (极['c2_high'] > df['c1_high']) & 
+            (df['c2_high'] > df['c1_high']) & 
             (df['c2_close'] < df['c1_high']) & 
             (df['open'] < df['c2_mid'])
         )
@@ -538,21 +562,33 @@ class FeatureEngineer:
         
         return features
 
+
 # ========================
 # MODEL LOADER
 # ========================
 class ModelLoader:
     def __init__(self, model_path, scaler_path):
+        logger.debug(f"Loading model from {model_path}")
+        logger.debug(f"Loading scaler from {scaler_path}")
         try:
+            logger.debug("Loading TensorFlow model...")
             self.model = tf.keras.models.load_model(model_path, compile=False)
+            logger.debug("Model loaded successfully")
+            
+            logger.debug("Loading Scikit-Learn scaler...")
             self.scaler = joblib.load(scaler_path)
+            logger.debug("Scaler loaded successfully")
         except Exception as e:
+            logger.error(f"Model loading failed: {str(e)}")
             raise RuntimeError(f"Model loading failed: {str(e)}")
         
     def predict(self, features):
+        logger.debug("Starting prediction...")
         scaled = self.scaler.transform([features])
         reshaped = scaled.reshape(1, 1, -1)
-        return self.model.predict(reshaped, verbose=0)[0][0]
+        prediction = self.model.predict(reshaped, verbose=0)[0][0]
+        logger.debug(f"Prediction complete: {prediction}")
+        return prediction
 
 # ========================
 # COLAB TRADING BOT
@@ -563,56 +599,91 @@ class ColabTradingBot:
         self.credentials = credentials
         self.logger = logging.getLogger(f"{timeframe}_bot")
         self.start_time = time.time()
-        self.max_duration = 11.5 * 3600  # 11.5 hours (leaves 30 min buffer)
+        self.max_duration = 11.5 * 3600
+        
+        logger.info(f"Initializing {timeframe} bot")
         
         # Load model
         model_path = os.path.join(MODELS_DIR, "5mbilstm_model.keras" if timeframe == "M5" else "15mbilstm_model.keras")
         scaler_path = os.path.join(MODELS_DIR, "scaler5mcrt.joblib" if timeframe == "M5" else "scaler15mcrt.joblib")
-        self.model_loader = ModelLoader(model_path, scaler_path)
-        self.feature_engineer = FeatureEngineer(timeframe)
-        self.data = pd.DataFrame()
         
-        self.logger.info(f"Bot initialized for {timeframe}")
+        logger.debug(f"Model path: {model_path}")
+        logger.debug(f"Scaler path: {scaler_path}")
+        
+        if not os.path.exists(model_path):
+            logger.error(f"Model file not found: {model_path}")
+        if not os.path.exists(scaler_path):
+            logger.error(f"Scaler file not found: {scaler_path}")
+            
+        try:
+            self.model_loader = ModelLoader(model_path, scaler_path)
+            self.feature_engineer = FeatureEngineer(timeframe)
+            self.data = pd.DataFrame()
+            logger.info(f"Bot initialized for {timeframe}")
+        except Exception as e:
+            logger.error(f"Bot initialization failed: {str(e)}")
+            raise
 
     def calculate_next_candle_time(self):
-        """Calculate next candle start time in NY timezone"""
         now = datetime.now(NY_TZ)
         minute = now.minute
         
         if self.timeframe == "M5":
             next_minute = ((minute // 5) + 1) * 5
-        else:  # M15
+        else:
             next_minute = ((minute // 15) + 1) * 15
             
         if next_minute >= 60:
-            return now.replace(
+            result = now.replace(
                 hour=now.hour+1, minute=0, second=0, microsecond=0
             ) + timedelta(minutes=next_minute - 60)
-        return now.replace(minute=next_minute, second=0, microsecond=0)
+        else:
+            result = now.replace(minute=next_minute, second=0, microsecond=0)
+            
+        logger.debug(f"Next candle time: {result}")
+        return result
 
     def run(self):
         """Main bot execution loop"""
+        thread_name = threading.current_thread().name
+        logger.info(f"Starting bot thread: {thread_name}")
+        
         session_start = time.time()
         timeout_msg = f"⏳ {self.timeframe} bot session will expire in 30 minutes"
         start_msg = f"🚀 {self.timeframe} bot started at {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
         
         # Test credentials before starting
+        logger.info("Testing credentials...")
         creds_valid = self.test_credentials()
         if not creds_valid:
-            self.logger.error("Credentials test failed. Exiting bot.")
+            logger.error("Credentials test failed. Exiting bot.")
             return
             
-        send_telegram(start_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+        logger.info("Sending startup message...")
+        telegram_sent = send_telegram(start_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+        logger.info(f"Startup message {'sent' if telegram_sent else 'failed to send'}")
+        
+        # Initial data fetch
+        logger.info("Fetching initial data...")
+        self.data = fetch_candles(
+            self.timeframe,
+            api_key=self.credentials['oanda_api_key']
+        )
+        logger.info(f"Initial data fetched: {len(self.data)} records")
         
         while True:
             try:
                 # Check session time remaining
                 elapsed = time.time() - session_start
+                logger.debug(f"Session time elapsed: {elapsed/3600:.2f} hours")
+                
                 if elapsed > (self.max_duration - 1800) and not hasattr(self, 'timeout_sent'):
+                    logger.warning("Session nearing timeout, sending warning")
                     send_telegram(timeout_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                     self.timeout_sent = True
                     
                 if elapsed > self.max_duration:
+                    logger.warning("Session timeout reached, exiting")
                     end_msg = f"🔴 {self.timeframe} bot session ended after 12 hours"
                     send_telegram(end_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                     return
@@ -620,13 +691,14 @@ class ColabTradingBot:
                 # Calculate sleep time to next candle + 5 seconds
                 now = datetime.now(NY_TZ)
                 next_candle = self.calculate_next_candle_time()
-                sleep_seconds = (next_candle - now).total_seconds() + 5
+                sleep_seconds = max(1, (next_candle - now).total_seconds() + 5)
                 
-                if sleep_seconds > 0:
-                    time.sleep(sleep_seconds)
+                logger.debug(f"Sleeping for {sleep_seconds:.1f} seconds until next candle")
+                time.sleep(sleep_seconds)
                 
                 # Fetch new data
                 last_time = self.data['time'].max() if not self.data.empty else None
+                logger.debug(f"Fetching new data since {last_time}")
                 new_data = fetch_candles(
                     self.timeframe,
                     last_time,
@@ -634,26 +706,37 @@ class ColabTradingBot:
                 )
                 
                 if not new_data.empty:
+                    logger.debug(f"Received {len(new_data)} new records")
                     self.data = pd.concat([self.data, new_data]).drop_duplicates('time').sort_values('time').tail(201)
+                    logger.debug(f"Total records now: {len(self.data)}")
                 else:
-                    self.logger.warning("No new data fetched")
+                    logger.warning("No new data fetched")
                     continue
                 
                 # Detect CRT pattern
+                logger.debug("Checking for CRT pattern...")
                 signal_type, signal_data = self.feature_engineer.calculate_crt_signal_vectorized(self.data)
+                
                 if not signal_type:
+                    logger.debug("No CRT pattern detected")
                     continue
                     
+                logger.info(f"CRT pattern detected: {signal_type}")
+                
                 # Generate features
                 features = self.feature_engineer.generate_features(self.data, signal_type)
                 if features is None:
+                    logger.warning("Feature generation failed")
                     continue
                     
                 # Get prediction
+                logger.debug("Getting model prediction...")
                 prediction = self.model_loader.predict(features)
+                logger.info(f"Prediction: {prediction:.4f}")
                 
                 # Send alert
                 if prediction > PREDICTION_THRESHOLD:
+                    logger.info("High-confidence signal detected, sending alert")
                     message = (
                         f"🚨 XAU/USD Signal ({self.timeframe})\n"
                         f"Type: {signal_type}\n"
@@ -664,40 +747,62 @@ class ColabTradingBot:
                         f"Time: {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
                     )
                     send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+                else:
+                    logger.debug(f"Signal below threshold ({prediction:.4f} < {PREDICTION_THRESHOLD})")
                     
             except Exception as e:
                 error_msg = f"❌ {self.timeframe} bot error: {str(e)}"
-                self.logger.error(error_msg)
+                logger.error(error_msg, exc_info=True)
                 send_telegram(error_msg[:1000], self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                 time.sleep(60)
                 
     def test_credentials(self):
-        """Test both Telegram and Oanda credentials"""
+        """Test both Telegram and Oanda credentials with detailed logging"""
+        logger.info("Testing credentials...")
+        
         # Test Telegram
         test_msg = f"🔧 {self.timeframe} bot credentials test"
+        logger.debug(f"Sending Telegram test: {test_msg}")
         telegram_ok = send_telegram(test_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
         
         # Test Oanda
         oanda_ok = False
         try:
-            test_data = fetch_candles("M5", api_key=self.credentials['oanda_api_key'])
+            logger.debug("Testing Oanda API with small candle request")
+            test_data = fetch_candles("M5", api_key=self.credentials['oanda_api_key'], count=1)
             oanda_ok = not test_data.empty
-        except Exception:
-            pass
+            logger.debug(f"Oanda test {'succeeded' if oanda_ok else 'failed'}")
+        except Exception as e:
+            logger.error(f"Oanda test failed: {str(e)}")
             
         if not telegram_ok:
-            self.logger.error("Telegram credentials test failed")
+            logger.error("Telegram credentials test failed")
             
         if not oanda_ok:
-            self.logger.error("Oanda credentials test failed")
+            logger.error("Oanda credentials test failed")
             
+        logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok else 'FAIL'}")
         return telegram_ok and oanda_ok
 
 # ========================
 # MAIN EXECUTION
 # ========================
 if __name__ == "__main__":
-    logger = setup_colab()
+    print("===== BOT STARTING =====")
+    print(f"Start time: {datetime.now(NY_TZ)}")
+    
+    # Force debug logging to console
+    debug_handler = logging.StreamHandler()
+    debug_handler.setLevel(logging.DEBUG)
+    debug_handler.setFormatter(logging.Formatter(log_format))
+    logging.getLogger().addHandler(debug_handler)
+    
+    logger.info("Starting main execution")
+    
+    try:
+        logger = setup_colab()
+    except Exception as e:
+        logger.error(f"Colab setup failed: {str(e)}")
     
     # Load credentials
     credentials = {
@@ -707,24 +812,53 @@ if __name__ == "__main__":
         'oanda_api_key': os.getenv("OANDA_API_KEY")
     }
     
-    # Verify credentials
+    # Log credentials status (without values)
+    logger.info("Checking credentials...")
+    credentials_status = {k: "SET" if v else "MISSING" for k, v in credentials.items()}
+    for k, status in credentials_status.items():
+        logger.info(f"{k}: {status}")
+    
     if not all(credentials.values()):
         logger.error("Missing one or more credentials in environment variables")
-        # Print which credentials are missing
-        for key, value in credentials.items():
-            if not value:
-                logger.error(f"Missing: {key}")
-    else:
-        logger.info("All credentials found in environment")
+        # Send alert if Telegram credentials are available
+        if credentials['telegram_token'] and credentials['telegram_chat_id']:
+            send_telegram("❌ Bot failed to start: Missing credentials", 
+                         credentials['telegram_token'], credentials['telegram_chat_id'])
+        sys.exit(1)
     
-    # Start bots
-    bot_5m = ColabTradingBot("M5", credentials)
-    bot_15m = ColabTradingBot("M15", credentials)
+    logger.info("All credentials present")
     
-    # Run in separate threads
-    threading.Thread(target=bot_5m.run, daemon=True).start()
-    threading.Thread(target=bot_15m.run, daemon=True).start()
-    
-    # Keep main thread alive
-    while True:
-        time.sleep(3600)  # Check hourly
+    try:
+        # Start bots
+        logger.info("Creating M5 bot")
+        bot_5m = ColabTradingBot("M5", credentials)
+        logger.info("Creating M15 bot")
+        bot_15m = ColabTradingBot("M15", credentials)
+        
+        # Run in separate threads
+        logger.info("Starting bot threads")
+        t1 = threading.Thread(target=bot_5m.run, name="M5_Bot")
+        t2 = threading.Thread(target=bot_15m.run, name="M15_Bot")
+        
+        t1.daemon = True
+        t2.daemon = True
+        
+        t1.start()
+        logger.info("M5 bot thread started")
+        t2.start()
+        logger.info("M15 bot thread started")
+        
+        # Keep main thread alive with status updates
+        logger.info("Main thread entering monitoring loop")
+        while True:
+            logger.info(f"Bot status: M5 {'alive' if t1.is_alive() else 'dead'}, "
+                       f"M15 {'alive' if t2.is_alive() else 'dead'}")
+            time.sleep(60)
+            
+    except Exception as e:
+        logger.error(f"Main execution failed: {str(e)}", exc_info=True)
+        # Attempt to send error via Telegram if credentials are available
+        if credentials.get('telegram_token') and credentials.get('telegram_chat_id'):
+            send_telegram(f"❌ Bot crashed: {str(e)[:500]}", 
+                         credentials['telegram_token'], credentials['telegram_chat_id'])
+        sys.exit(1)
