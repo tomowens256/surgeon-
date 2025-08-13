@@ -303,8 +303,10 @@ class FeatureEngineer:
             'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
         ]
 
+ 
+        
     def calculate_crt_signal_vectorized(self, df):
-        """Vectorized CRT signal calculation with precise indexing"""
+        """Vectorized CRT signal calculation matching backtesting version"""
         if len(df) < 3:
             return None, None
             
@@ -322,7 +324,7 @@ class FeatureEngineer:
         df['c2_range'] = df['c2_high'] - df['c2_low']
         df['c2_mid'] = df['c2_low'] + (0.5 * df['c2_range'])
         
-        # Vectorized conditions
+        # Vectorized conditions - EXACTLY AS IN BACKTESTING
         buy_mask = (
             (df['c2_low'] < df['c1_low']) & 
             (df['c2_close'] > df['c1_low']) & 
@@ -354,6 +356,10 @@ class FeatureEngineer:
             return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': last_row['time']}
         else:
             return None, None
+        """Vectorized CRT signal calculation with precise indexing"""
+        if len(df) < 3:
+            return None, None
+            
 
     def calculate_technical_indicators(self, df):
         """Calculate technical indicators WITHOUT volume imputation"""
@@ -739,21 +745,21 @@ class ColabTradingBot:
                 prediction = self.model_loader.predict(features)
                 logger.info(f"Prediction: {prediction:.4f}")
                 
-                # Send alert
-                if prediction > PREDICTION_THRESHOLD:
-                    logger.info("High-confidence signal detected, sending alert")
-                    message = (
-                        f"🚨 XAU/USD Signal ({self.timeframe})\n"
-                        f"Type: {signal_type}\n"
-                        f"Entry: {signal_data['entry']:.5f}\n"
-                        f"SL: {signal_data['sl']:.5f}\n"
-                        f"TP: {signal_data['tp']:.5f}\n"
-                        f"Confidence: {prediction:.4f}\n"
-                        f"Time: {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
-                    )
-                    send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-                else:
-                    logger.debug(f"Signal below threshold ({prediction:.4f} < {PREDICTION_THRESHOLD})")
+                # Send ALL signals (both high and low confidence)
+                confidence_level = "HIGH" if prediction > PREDICTION_THRESHOLD else "LOW"
+                emoji = "🚨" if confidence_level == "HIGH" else "⚠️"
+                
+                message = (
+                    f"{emoji} XAU/USD Signal ({self.timeframe})\n"
+                    f"Type: {signal_type}\n"
+                    f"Entry: {signal_data['entry']:.5f}\n"
+                    f"SL: {signal_data['sl']:.5f}\n"
+                    f"TP: {signal_data['tp']:.5f}\n"
+                    f"Confidence: {prediction:.4f} ({confidence_level})\n"
+                    f"Time: {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+                logger.info(f"Signal sent ({confidence_level} confidence)")
                     
             except Exception as e:
                 error_msg = f"❌ {self.timeframe} bot error: {str(e)}"
