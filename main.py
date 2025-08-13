@@ -227,6 +227,7 @@ def fetch_candles(timeframe, last_time=None, api_key=None):
                 continue
                 
             df = pd.DataFrame(data).drop_duplicates(subset=['time'], keep='last')
+            df = df.reset_index(drop=True)  # Reset index to avoid duplicate labels
             if last_time:
                 df = df[df['time'] > last_time].sort_values('time')
                 
@@ -718,7 +719,11 @@ class ColabTradingBot:
                 
                 if not new_data.empty:
                     logger.debug(f"Received {len(new_data)} new records")
-                    self.data = pd.concat([self.data, new_data]).drop_duplicates('time').sort_values('time').tail(201)
+                    self.data = pd.concat([self.data, new_data], ignore_index=True) \
+                    
+                       .drop_duplicates('time') \
+                       .sort_values('time') \
+                       .tail(201)
                     logger.debug(f"Total records now: {len(self.data)}")
                 else:
                     logger.warning("No new data fetched")
