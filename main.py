@@ -71,10 +71,8 @@ logger = logging.getLogger(__name__)
 # COLAB SETUP FUNCTION
 # ========================
 def setup_colab():
-    """Mount Drive and install packages"""
-    logger.debug("Mounting Google Drive...")
-    drive.mount('/content/drive')
-    logger.debug("Google Drive mounted successfully")
+    """Set up environment for Colab without remounting"""
+    logger.debug("Configuring Colab environment...")
     
     # Configure logging
     logging.basicConfig(
@@ -82,6 +80,13 @@ def setup_colab():
         format=log_format,
         handlers=[logging.StreamHandler()]
     )
+    
+    # Set TensorFlow logging level
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+    tf.get_logger().setLevel('ERROR')
+    
+    logger.info("Colab environment configured")
+    return logger
     
     # Set TensorFlow logging level
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -756,6 +761,7 @@ class ColabTradingBot:
                 send_telegram(error_msg[:1000], self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                 time.sleep(60)
                 
+    
     def test_credentials(self):
         """Test both Telegram and Oanda credentials with detailed logging"""
         logger.info("Testing credentials...")
@@ -769,7 +775,8 @@ class ColabTradingBot:
         oanda_ok = False
         try:
             logger.debug("Testing Oanda API with small candle request")
-            test_data = fetch_candles("M5", api_key=self.credentials['oanda_api_key'], count=1)
+            # REMOVE THE 'count' PARAMETER HERE:
+            test_data = fetch_candles("M5", api_key=self.credentials['oanda_api_key'])
             oanda_ok = not test_data.empty
             logger.debug(f"Oanda test {'succeeded' if oanda_ok else 'failed'}")
         except Exception as e:
@@ -783,7 +790,6 @@ class ColabTradingBot:
             
         logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok else 'FAIL'}")
         return telegram_ok and oanda_ok
-
 # ========================
 # MAIN EXECUTION
 # ========================
