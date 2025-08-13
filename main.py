@@ -33,7 +33,7 @@ from oandapyV20.exceptions import V20Error
 import oandapyV20.endpoints.instruments as instruments
 import tensorflow as tf
 from google.colab import drive
-from IPython.display import clear_output
+from IPython.display import clear_output  # FIXED: Added import
 
 # ========================
 # SUPPRESS TENSORFLOW LOGS
@@ -265,7 +265,7 @@ class FeatureEngineer:
         self.shift_features = [
             'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
             'atr_z', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100',
-            'vwap', 'vwap_std', 'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60',
+            'vwap', 'vwap_std', 'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_极',
             'trend_strength_up', 'trend_strength_down', 'volume', 'body_size', 
             'wick_up', 'wick_down', 'prev_body_size', 'prev_wick_up', 'prev_wick_down', 
             'is_bad_combo', 'price_div_vol', 'rsi_div_macd', 'price_div_vwap', 
@@ -301,7 +301,7 @@ class FeatureEngineer:
         )
         
         sell_mask = (
-            (df['c2_high'] > df['c1_high']) & 
+            (极['c2_high'] > df['c1_high']) & 
             (df['c2_close'] < df['c1_high']) & 
             (df['open'] < df['c2_mid'])
         )
