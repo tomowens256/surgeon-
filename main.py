@@ -720,10 +720,9 @@ class ColabTradingBot:
                 if not new_data.empty:
                     logger.debug(f"Received {len(new_data)} new records")
                     self.data = pd.concat([self.data, new_data], ignore_index=True) \
-                    
-                       .drop_duplicates('time') \
-                       .sort_values('time') \
-                       .tail(201)
+                    .drop_duplicates('time') \
+                    .sort_values('time') \
+                    .tail(201)
                     logger.debug(f"Total records now: {len(self.data)}")
                 else:
                     logger.warning("No new data fetched")
