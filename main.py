@@ -99,6 +99,10 @@ def parse_oanda_time(time_str):
 
 def send_telegram(message, token, chat_id):
     """Send formatted message to Telegram with detailed error handling and retries"""
+    if not token or not chat_id:
+        logger.error("Telegram credentials missing")
+        return False
+        
     logger.info(f"Attempting to send Telegram message: {message}")
     if len(message) > 4000:
         message = message[:4000] + "... [TRUNCATED]"
@@ -121,7 +125,10 @@ def send_telegram(message, token, chat_id):
             if response.status_code == 200 and response.json().get('ok'):
                 return True
             else:
-                logger.error(f"Telegram error: {response.status_code} - {response.text}")
+                error_msg = f"Telegram error {response.status_code}"
+                if response.text:
+                    error_msg += f": {response.text[:200]}"
+                logger.error(error_msg)
                 time.sleep(2 ** attempt)  # Exponential backoff
         except Exception as e:
             logger.error(f"Telegram connection failed: {str(e)}")
@@ -131,8 +138,17 @@ def send_telegram(message, token, chat_id):
 
 def fetch_candles(timeframe, last_time=None, api_key=None):
     """Fetch exactly 201 candles for XAU_USD with full precision and robust error handling"""
+    if not api_key:
+        logger.error("Oanda API key missing")
+        return pd.DataFrame()
+        
     logger.info(f"Fetching 201 candles for XAU_USD with timeframe {timeframe}")
-    api = API(access_token=api_key, environment="practice")
+    try:
+        api = API(access_token=api_key, environment="practice")
+    except Exception as e:
+        logger.error(f"Oanda API initialization failed: {str(e)}")
+        return pd.DataFrame()
+        
     params = {
         "granularity": timeframe,
         "count": 201,
@@ -579,6 +595,13 @@ class ColabTradingBot:
         session_start = time.time()
         timeout_msg = f"⏳ {self.timeframe} bot session will expire in 30 minutes"
         start_msg = f"🚀 {self.timeframe} bot started at {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        # Test credentials before starting
+        creds_valid = self.test_credentials()
+        if not creds_valid:
+            self.logger.error("Credentials test failed. Exiting bot.")
+            return
+            
         send_telegram(start_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
         
         while True:
@@ -612,6 +635,9 @@ class ColabTradingBot:
                 
                 if not new_data.empty:
                     self.data = pd.concat([self.data, new_data]).drop_duplicates('time').sort_values('time').tail(201)
+                else:
+                    self.logger.warning("No new data fetched")
+                    continue
                 
                 # Detect CRT pattern
                 signal_type, signal_data = self.feature_engineer.calculate_crt_signal_vectorized(self.data)
@@ -644,6 +670,28 @@ class ColabTradingBot:
                 self.logger.error(error_msg)
                 send_telegram(error_msg[:1000], self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                 time.sleep(60)
+                
+    def test_credentials(self):
+        """Test both Telegram and Oanda credentials"""
+        # Test Telegram
+        test_msg = f"🔧 {self.timeframe} bot credentials test"
+        telegram_ok = send_telegram(test_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+        
+        # Test Oanda
+        oanda_ok = False
+        try:
+            test_data = fetch_candles("M5", api_key=self.credentials['oanda_api_key'])
+            oanda_ok = not test_data.empty
+        except Exception:
+            pass
+            
+        if not telegram_ok:
+            self.logger.error("Telegram credentials test failed")
+            
+        if not oanda_ok:
+            self.logger.error("Oanda credentials test failed")
+            
+        return telegram_ok and oanda_ok
 
 # ========================
 # MAIN EXECUTION
@@ -658,6 +706,16 @@ if __name__ == "__main__":
         'oanda_account_id': os.getenv("OANDA_ACCOUNT_ID"),
         'oanda_api_key': os.getenv("OANDA_API_KEY")
     }
+    
+    # Verify credentials
+    if not all(credentials.values()):
+        logger.error("Missing one or more credentials in environment variables")
+        # Print which credentials are missing
+        for key, value in credentials.items():
+            if not value:
+                logger.error(f"Missing: {key}")
+    else:
+        logger.info("All credentials found in environment")
     
     # Start bots
     bot_5m = ColabTradingBot("M5", credentials)
