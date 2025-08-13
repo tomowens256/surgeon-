@@ -501,9 +501,9 @@ class FeatureEngineer:
         
         return features
 
-# ========================
-# BOT INSTANCE CLASS (SIMPLIFIED)
-# ========================
+# ============= UPDATED main.py =============
+# ... [previous code remains the same until BotInstance class] ...
+
 class BotInstance:
     def __init__(self, timeframe):
         self.timeframe = timeframe
@@ -511,17 +511,59 @@ class BotInstance:
         self.scaler = None
         self.detector = None
         self.logger = logging.getLogger(f"{__name__}.{timeframe}")
-        self.active = True
-        self.thread = threading.Thread(target=self.run, daemon=True)
-        self.thread.start()
+        self.scheduler = None
+        self.active_trades = {}
         
-    def load_model(self, model_path):
+    def robust_model_loader(self, model_path):
+        """Robust model loader with architecture reconstruction"""
+        self.logger.info(f"Loading model with robust loader: {model_path}")
+        
+        # Determine model architecture based on timeframe
+        if self.timeframe == "M5":
+            input_shape = (1, 76)
+            lstm_units = [512, 256]
+        else:  # M15
+            input_shape = (1, 68)
+            lstm_units = [384, 192]
+        
         try:
-            self.logger.info(f"Loading Keras model from: {model_path}")
-            return tf.keras.models.load_model(model_path, compile=False)
+            # Attempt 1: Standard loading
+            return load_model(model_path, compile=False)
         except Exception as e:
-            self.logger.error(f"Model loading failed: {str(e)}")
-            raise RuntimeError(f"Could not load model: {str(e)}")
+            self.logger.warning(f"Standard loading failed: {str(e)}")
+            
+            # Attempt 2: Build model from scratch
+            self.logger.info("Building model from scratch...")
+            model = tf.keras.Sequential()
+            
+            # Input layer - use Input instead of InputLayer for compatibility
+            model.add(tf.keras.layers.Input(shape=input_shape, name="input_layer"))
+            
+            # First BiLSTM layer
+            model.add(Bidirectional(
+                LSTM(lstm_units[0], return_sequences=True, 
+                     kernel_initializer='glorot_uniform'),
+                name="bidirectional_1"
+            ))
+            
+            # Second BiLSTM layer
+            model.add(Bidirectional(
+                LSTM(lstm_units[1], kernel_initializer='glorot_uniform'),
+                name="bidirectional_2"
+            ))
+            
+            # Dense layers
+            model.add(Dense(128, activation='relu', name="dense_1"))
+            model.add(Dense(1, activation='sigmoid', name="output"))
+            
+            # Load weights
+            try:
+                model.load_weights(model_path, by_name=True, skip_mismatch=True)
+                self.logger.warning("Loaded weights with possible mismatches")
+                return model
+            except Exception as e:
+                self.logger.error(f"Weight loading failed: {str(e)}")
+                raise RuntimeError(f"Could not load weights: {str(e)}")
         
     def run(self):
         self.logger.info(f"Starting trading bot for {self.timeframe}")
@@ -536,8 +578,10 @@ class BotInstance:
                 model_path = os.path.join(MODELS_DIR, MODEL_15M)
                 scaler_path = os.path.join(MODELS_DIR, SCALER_15M)
                 
-            # Load model and scaler
-            self.model = self.load_model(model_path)
+            # Load model with robust loader
+            self.model = self.robust_model_loader(model_path)
+            
+            # Load scaler
             self.scaler = joblib.load(scaler_path)
             
             # Initialize data
@@ -552,7 +596,7 @@ class BotInstance:
             self.logger.info(f"Bot started successfully for {self.timeframe}")
             
             # Main trading loop
-            while self.active:
+            while True:
                 try:
                     # Check for new signals
                     signal_type, signal_data = feature_engineer.calculate_crt_signal_vectorized(df)
@@ -591,6 +635,8 @@ class BotInstance:
         except Exception as e:
             self.logger.error(f"Failed to start bot: {str(e)}")
             send_telegram(f"❌ *Bot Failed* {self.timeframe}:\n{str(e)}")
+
+    # ... [rest of BotInstance remains the same] ...
 
     def predict_single_model(self, features_df):
         try:
