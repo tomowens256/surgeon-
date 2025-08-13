@@ -638,23 +638,29 @@ class ColabTradingBot:
 
     def calculate_next_candle_time(self):
         now = datetime.now(NY_TZ)
-        minute = now.minute
         
         if self.timeframe == "M5":
-            next_minute = ((minute // 5) + 1) * 5
-        else:
-            next_minute = ((minute // 15) + 1) * 15
-            
-        if next_minute >= 60:
-            result = now.replace(
-                hour=now.hour+1, minute=0, second=0, microsecond=0
-            ) + timedelta(minutes=next_minute - 60)
-        else:
-            result = now.replace(minute=next_minute, second=0, microsecond=0)
-            
-        logger.debug(f"Next candle time: {result}")
-        return result
-
+            # Calculate minutes past the hour
+            minutes_past = now.minute % 5
+            next_minute = now.minute - minutes_past + 5
+            if next_minute >= 60:
+                next_time = now.replace(hour=now.hour+1, minute=0, second=0, microsecond=0)
+            else:
+                next_time = now.replace(minute=next_minute, second=0, microsecond=0)
+        else:  # M15
+            minutes_past = now.minute % 15
+            next_minute = now.minute - minutes_past + 15
+            if next_minute >= 60:
+                next_time = now.replace(hour=now.hour+1, minute=0, second=0, microsecond=0)
+            else:
+                next_time = now.replace(minute=next_minute, second=0, microsecond=0)
+        
+        # If we're at the exact candle start, move to next candle
+        if now >= next_time:
+            next_time += timedelta(minutes=5 if self.timeframe == "M5" else 15)
+        
+        logger.debug(f"Current time: {now}, Next candle: {next_time}")
+        return next_time
     def run(self):
         """Main bot execution loop"""
         thread_name = threading.current_thread().name
@@ -719,10 +725,12 @@ class ColabTradingBot:
                 
                 if not new_data.empty:
                     logger.debug(f"Received {len(new_data)} new records")
-                    self.data = pd.concat([self.data, new_data], ignore_index=True) \
-                    .drop_duplicates('time') \
-                    .sort_values('time') \
-                    .tail(201)
+                    self.data = self.data.reset_index(drop=True)
+                    new_data = new_data.reset_index(drop=True)
+                    self.data = pd.concat([self.data, new_data], ignore_index=True)
+                    self.data = self.data.drop_duplicates(subset=['time'], keep='last')
+                    self.data = self.data.sort_values('time').tail(201)
+                    
                     logger.debug(f"Total records now: {len(self.data)}")
                 else:
                     logger.warning("No new data fetched")
@@ -743,7 +751,20 @@ class ColabTradingBot:
                 if features is None:
                     logger.warning("Feature generation failed")
                     continue
-                    
+                feature_debug = (
+                f"🔍 {self.timeframe} Feature Debug\n"
+                f"Time: {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Signal: {signal_type}\n"
+                f"Entry: {signal_data['entry']:.5f}\n"
+                "Top Features:\n"
+                )
+            
+                # Get top 10 most significant features
+                top_features = features.abs().sort_values(ascending=False)#.head(10)
+                for feat, value in top_features.items():
+                    feature_debug += f"{feat}: {value:.4f}\n"
+                
+            send_telegram(feature_debug, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])    
                 # Get prediction
                 logger.debug("Getting model prediction...")
                 prediction = self.model_loader.predict(features)
