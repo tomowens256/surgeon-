@@ -210,46 +210,31 @@ def fetch_candles(timeframe, last_time=None):
 def build_model(timeframe):
     """Build model architecture from scratch based on timeframe"""
     if timeframe == "M5":
-        input_shape = (1, 76)  # 76 features for M5
-        lstm_units = [512, 256]
-    else:  # M15
-        input_shape = (1, 68)  # 68 features for M15
-        lstm_units = [384, 192]
+        input_shape = (x_train.shape[1], x_train.shape[2])  # (1, 76) for M5
+        units = 512
+    else:  # M15 timeframe
+        input_shape = (x_train.shape[1], x_train.shape[2])  # (1, 68) for M15
+        units = 384
     
-    # Define input layer
-    inputs = Input(shape=input_shape, name="input_layer")
-    
-    # First BiLSTM layer
-    bilstm1 = Bidirectional(
-        LSTM(lstm_units[0], return_sequences=True, 
-             kernel_initializer='glorot_uniform'),
-        name="bidirectional_1"
-    )(inputs)
-    
-    # Second BiLSTM layer
-    bilstm2 = Bidirectional(
-        LSTM(lstm_units[1], kernel_initializer='glorot_uniform'),
-        name="bidirectional_2"
-    )(bilstm1)
-    
-    # Dense layers
-    dense1 = Dense(128, activation='relu', name="dense_1")(bilstm2)
-    output = Dense(1, activation='sigmoid', name="output")(dense1)
-    
-    # Create model
-    model = Model(inputs=inputs, outputs=output, name=f"{timeframe}_model")
+    model = Sequential()
+    model.add(Input(shape=input_shape))
+    model.add(Bidirectional(LSTM(units)))
+    model.add(Dropout(0.15))  # From your training script
+    model.add(Dense(1, activation='sigmoid'))
     return model
 
 def load_model_with_weights(model_path, timeframe):
-    """Load model by reconstructing architecture and loading weights"""
+    """Load model by reconstructing exact training architecture"""
     # Build model architecture
     model = build_model(timeframe)
     
     # Load weights
-    model.load_weights(model_path)
-    
-    return model
-
+    try:
+        model.load_weights(model_path)
+        return model
+    except Exception as e:
+        logger.error(f"Weight loading failed: {str(e)}")
+        raise RuntimeError(f"Could not load weights: {str(e)}")
 # ========================
 # FEATURE ENGINEER WITH FIXES
 # ========================
