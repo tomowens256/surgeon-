@@ -718,8 +718,9 @@ class ColabTradingBot:
                 while datetime.now(NY_TZ) < next_candle:
                     time.sleep(0.001)  # 1ms precision
                 
-                logger.debug("Candle open detected - fetching new candle")
-                
+                logger.debug("Candle open detected - waiting 5s for candle availability")
+                # CRITICAL FIX: Wait 5 seconds for the candle to be available
+                time.sleep(5)
                 # Fetch only the new candle
                 last_time = self.data['time'].max() if not self.data.empty else None
                 new_data = fetch_candles(
