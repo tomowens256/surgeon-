@@ -756,7 +756,7 @@ class ColabTradingBot:
                 )
             
                 # Get top 10 most significant features
-                top_features = features.abs().sort_values(ascending=False).head(10)
+                top_features = features.abs().sort_values(ascending=False)#.head(10)
                 for feat, value in top_features.items():
                     feature_debug += f"{feat}: {value:.4f}\n"
                     
