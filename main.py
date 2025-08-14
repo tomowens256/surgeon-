@@ -67,6 +67,83 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Precomputed combo_flags dictionary
+COMBO_FLAGS = {
+    "SELL_sideways_nan": "dead", "BUY_sideways_nan": "dead", 
+    "SELL_sideways_(70, 80]": "dead", "BUY_sideways_(70, 80]": "fine",
+    "SELL_sideways_(60, 70]": "fair", "SELL_sideways_(50, 60]": "fair",
+    "BUY_sideways_(50, 60]": "fine", "BUY_sideways_(60, 70]": "fine",
+    "BUY_sideways_(40, 50]": "fair", "SELL_sideways_(40, 50]": "fine",
+    "SELL_sideways_(30, 40]": "fine", "SELL_uptrend_(50, 60]": "fine",
+    "BUY_uptrend_(50, 60]": "fair", "SELL_uptrend_(40, 50]": "fine",
+    "BUY_downtrend_(40, 50]": "fair", "BUY_uptrend_(60, 70]": "fine",
+    "SELL_uptrend_(60, 70]": "fair", "BUY_uptrend_(40, 50]": "fair",
+    "SELL_downtrend_(40, 50]": "fair", "BUY_uptrend_(30, 40]": "dead",
+    "BUY_downtrend_(30, 40]": "fair", "BUY_downtrend_(50, 60]": "fine",
+    "SELL_downtrend_(50, 60]": "fair", "SELL_downtrend_(30, 40]": "fine",
+    "BUY_uptrend_(70, 80]": "fine", "SELL_uptrend_(70, 80]": "fair",
+    "SELL_uptrend_(80, 100]": "dead", "SELL_downtrend_(20, 30]": "fine",
+    "SELL_sideways_(80, 100]": "dead", "BUY_sideways_(30, 40]": "fair",
+    "SELL_downtrend_(60, 70]": "dead", "SELL_uptrend_(30, 40]": "fine",
+    "SELL_downtrend_(70, 80]": "dead", "BUY_downtrend_(20, 30]": "fair",
+    "BUY_downtrend_(0, 20]": "dead", "BUY_sideways_(20, 30]": "dead",
+    "SELL_sideways_(20, 30]": "fine", "BUY_downtrend_(60, 70]": "fine",
+    "BUY_sideways_(0, 20]": "dead", "SELL_downtrend_(0, 20]": "fine",
+    "BUY_uptrend_(80, 100]": "fine", "SELL_sideways_(0, 20]": "fine",
+    "BUY_sideways_(80, 100]": "fine", "SELL_uptrend_(20, 30]": "fine",
+    "BUY_downtrend_(70, 80]": "fine", "BUY_uptrend_(20, 30]": "dead",
+    "SELL_downtrend_(80, 100]": "dead", "BUY_uptrend_(0, 20]": "dead",
+    "SELL_uptrend_(0, 20]": "dead", "nan_sideways_(50, 60]": "dead",
+    "nan_sideways_(40, 50]": "dead"
+}
+
+# Precomputed combo_flags2 dictionary
+COMBO_FLAGS2 = {
+    "SELL_nan_nan": "dead", "BUY_nan_nan": "dead", 
+    "SELL_(70, 80]_nan": "dead", "BUY_(70, 80]_nan": "dead",
+    "SELL_(70, 80]_(0.527, 9.246]": "fair", "SELL_(60, 70]_(0.527, 9.246]": "fair",
+    "SELL_(50, 60]_(0.527, 9.246]": "fine", "BUY_(50, 60]_(0.527, 9.246]": "fair",
+    "BUY_(60, 70]_(0.527, 9.246]": "fine", "BUY_(40, 50]_(0.134, 0.527]": "fair",
+    "SELL_(40, 50]_(0.134, 0.527]": "fine", "SELL_(30, 40]_(0.134, 0.527]": "fine",
+    "BUY_(40, 50]_(-0.138, 0.134]": "fair", "SELL_(50, 60]_(-0.138, 0.134]": "fair",
+    "BUY_(50, 60]_(-0.138, 0.134]": "fine", "SELL_(40, 50]_(-0.138, 0.134]": "fine",
+    "BUY_(40, 50]_(-0.496, -0.138]": "fair", "BUY_(60, 70]_(-0.138, 0.134]": "fine",
+    "SELL_(60, 70]_(0.134, 0.527]": "fair", "BUY_(50, 60]_(0.134, 0.527]": "fair",
+    "SELL_(50, 60]_(0.134, 0.527]": "fine", "SELL_(40, 50]_(-0.496, -0.138]": "fair",
+    "SELL_(30, 40]_(-0.496, -0.138]": "fine", "BUY_(40, 50]_(-12.386, -0.496]": "fine",
+    "BUY_(60, 70]_(0.134, 0.527]": "fine", "BUY_(30, 40]_(-0.496, -0.138]": "fair",
+    "BUY_(50, 60]_(-0.496, -0.138]": "fine", "BUY_(30, 40]_(-0.138, 0.134]": "dead",
+    "SELL_(50, 60]_(-0.496, -0.138]": "fair", "BUY_(70, 80]_(0.134, 0.527]": "fine",
+    "SELL_(80, 100]_(0.527, 9.246]": "dead", "BUY_(70, 80]_(0.527, 9.246]": "fine",
+    "SELL_(40, 50]_(0.527, 9.246]": "fine", "SELL_(40, 50]_(-12.386, -0.496]": "fair",
+    "BUY_(30, 40]_(-12.386, -0.496]": "fair", "SELL_(30, 40]_(-12.386, -0.496]": "fine",
+    "SELL_(20, 30]_(-12.386, -0.496]": "fine", "BUY_(50, 60]_(-12.386, -0.496]": "fine",
+    "SELL_(80, 100]_(-0.496, -0.138]": "dead", "SELL_(30, 40]_(-0.138, 0.134]": "fine",
+    "SELL_(70, 80]_(-0.138, 0.134]": "dead", "SELL_(50, 60]_(-12.386, -0.496]": "dead",
+    "BUY_(40, 50]_(0.527, 9.246]": "dead", "SELL_(20, 30]_(-0.496, -0.138]": "fine",
+    "BUY_(20, 30]_(-12.386, -0.496]": "fair", "BUY_(0, 20]_(-12.386, -0.496]": "dead",
+    "SELL_(60, 70]_(-0.138, 0.134]": "dead", "BUY_(20, 30]_(-0.496, -0.138]": "dead",
+    "BUY_(60, 70]_(-0.496, -0.138]": "fine", "BUY_(70, 80]_(-0.138, 0.134]": "fine",
+    "SELL_(70, 80]_(0.134, 0.527]": "dead", "SELL_(0, 20]_(-12.386, -0.496]": "fine",
+    "BUY_(80, 100]_(0.527, 9.246]": "fine", "SELL_(60, 70]_(-0.496, -0.138]": "dead",
+    "SELL_(30, 40]_(0.527, 9.246]": "fine", "BUY_(30, 40]_(0.134, 0.527]": "dead",
+    "SELL_(60, 70]_(-12.386, -0.496]": "dead", "BUY_(60, 70]_(-12.386, -0.496]": "fine",
+    "BUY_(80, 100]_(-0.496, -0.138]": "fine", "BUY_(80, 100]_(0.134, 0.527]": "fine",
+    "SELL_(20, 30]_(-0.138, 0.134]": "fine", "SELL_(0, 20]_(-0.496, -0.138]": "fair",
+    "BUY_(30, 40]_(0.527, 9.246]": "dead", "BUY_(20, 30]_(-0.138, 0.134]": "dead",
+    "SELL_(70, 80]_(-0.496, -0.138]": "dead", "BUY_(80, 100]_(-0.138, 0.134]": "fine",
+    "SELL_(20, 30]_(0.134, 0.527]": "fine", "BUY_(0, 20]_(-0.496, -0.138]": "dead",
+    "SELL_(80, 100]_(0.134, 0.527]": "fair", "BUY_(0, 20]_(-0.138, 0.134]": "dead",
+    "BUY_(0, 20]_(0.134, 0.527]": "dead", "SELL_(0, 20]_(-0.138, 0.134]": "fine",
+    "BUY_(70, 80]_(-0.496, -0.138]": "fine", "SELL_(70, 80]_(-12.386, -0.496]": "dead",
+    "SELL_(20, 30]_(0.527, 9.246]": "fine", "BUY_(20, 30]_(0.134, 0.527]": "dead",
+    "SELL_(80, 100]_(-0.138, 0.134]": "dead", "BUY_(20, 30]_(0.527, 9.246]": "dead",
+    "BUY_(0, 20]_(0.527, 9.246]": "dead", "nan_(50, 60]_(-12.386, -0.496]": "dead",
+    "nan_(40, 50]_(-0.138, 0.134]": "dead", "nan_(40, 50]_(-0.496, -0.138]": "dead",
+    "nan_(50, 60]_(0.134, 0.527]": "dead", "nan_(50, 60]_(0.527, 9.246]": "dead"
+}
+
+
 # ========================
 # COLAB SETUP FUNCTION
 # ========================
@@ -244,7 +321,6 @@ def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
     
     logger.error(f"Failed to fetch candles after {max_attempts} attempts")
     return pd.DataFrame()
-
 # ========================
 # FEATURE ENGINEER WITH FIXES
 # ========================
@@ -269,7 +345,8 @@ class FeatureEngineer:
             'trade_type_SELL', 'combo_flag_dead', 'combo_flag_fair', 'combo_flag_fine',
             'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
         ]
-        
+        self.rsi_bins = [0, 20, 30, 40, 50, 60, 70, 80, 100]
+        self.macd_z_bins = [-12.386, -0.496, -0.138, 0.134, 0.527, 9.246]
         # Timeframe-specific minute closed features at END
         if timeframe == "M5":
             self.features = self.base_features + [
@@ -475,6 +552,50 @@ class FeatureEngineer:
             
         return df
 
+
+    def calculate_combo_flags(self, row, signal_type):
+        """Calculate combo flags using preloaded dictionaries"""
+        # 1. Determine trend direction
+        trend_str = None
+        if row['trend_direction_downtrend'] == 1:
+            trend_str = 'downtrend'
+        elif row['trend_direction_sideways'] == 1:
+            trend_str = 'sideways'
+        elif row['trend_direction_uptrend'] == 1:
+            trend_str = 'uptrend'
+        else:
+            trend_str = 'sideways'  # Default
+        
+        # 2. Bin RSI value
+        rsi_val = row['rsi']
+        rsi_bin = None
+        for i in range(len(self.rsi_bins)-1):
+            if self.rsi_bins[i] <= rsi_val < self.rsi_bins[i+1]:
+                rsi_bin = f"({self.rsi_bins[i]}, {self.rsi_bins[i+1]}]"
+                break
+        
+        # 3. Bin MACD_Z value
+        macd_z_val = row['macd_z']
+        macd_z_bin = None
+        for i in range(len(self.macd_z_bins)-1):
+            if self.macd_z_bins[i] <= macd_z_val < self.macd_z_bins[i+1]:
+                macd_z_bin = f"({self.macd_z_bins[i]}, {self.macd_z_bins[i+1]}]"
+                break
+        
+        # 4. Create combo keys
+        combo_key = f"{signal_type}_{trend_str}_{rsi_bin}" if rsi_bin else f"{signal_type}_{trend_str}_nan"
+        combo_key2 = f"{signal_type}_{rsi_bin}_{macd_z_bin}" if rsi_bin and macd_z_bin else f"{signal_type}_{rsi_bin}_nan"
+        
+        # 5. Get flags from preloaded dictionaries
+        flag1 = COMBO_FLAGS.get(combo_key, 'dead')
+        flag2 = COMBO_FLAGS2.get(combo_key2, 'dead')
+        
+        # 6. Create flags dictionary
+        return {
+            'combo_flag': flag1,
+            'combo_flag2': flag2,
+            'is_bad_combo': 1 if flag1 == 'dead' else 0
+        }
     def generate_features(self, df, signal_type):
         if len(df) < 200:
             return None
@@ -507,23 +628,15 @@ class FeatureEngineer:
         df['tp_div_atr'] = df['tp_distance'] / (df['atr_z'] + 1e-6)
         df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
         
-        combo_flags = {'combo_flag_dead': 0, 'combo_flag_fair': 0, 'combo_flag_fine': 0}
-        combo_flags2 = {'combo_flag2_dead': 0, 'combo_flag2_fair': 0, 'combo_flag2_fine': 0}
-        if df['rsi'].iloc[-1] < 30 or df['macd_z'].iloc[-1] < -1:
-            combo_flags['combo_flag_dead'] = 1
-            combo_flags2['combo_flag2_dead'] = 1
-        elif df['rsi'].iloc[-1] > 70 or df['macd_z'].iloc[-1] > 1:
-            combo_flags['combo_flag_fine'] = 1
-            combo_flags2['combo_flag2_fine'] = 1
-        else:
-            combo_flags['combo_flag_fair'] = 1
-            combo_flags2['combo_flag2_fair'] = 1
-        for flag, value in combo_flags.items():
-            df[flag] = value
-        for flag, value in combo_flags2.items():
-            df[flag] = value
+        current_row = df.iloc[-1]
+        combo_flags = self.calculate_combo_flags(current_row, signal_type)
+        
+        # Set flags in dataframe
+        for flag_type in ['dead', 'fair', 'fine']:
+            df[f'combo_flag_{flag_type}'] = 1 if combo_flags['combo_flag'] == flag_type else 0
+            df[f'combo_flag2_{flag_type}'] = 1 if combo_flags['combo_flag2'] == flag_type else 0
             
-        df['is_bad_combo'] = 1 if combo_flags['combo_flag_dead'] == 1 else 0
+        df['is_bad_combo'] = combo_flags['is_bad_combo']
         
         df['crt_BUY'] = int(signal_type == 'BUY')
         df['crt_SELL'] = int(signal_type == 'SELL')
