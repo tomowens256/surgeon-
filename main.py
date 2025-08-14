@@ -341,9 +341,7 @@ class FeatureEngineer:
         
         # REMOVED VOLUME ESTIMATION - Using shifted features instead
         df['adj close'] = df['open']
-        df['garman_klass_vol'] = (
-            ((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -
-            (2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2)
+        df['garman_klass_vol'] = (((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -(2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2))
         df['rsi_20'] = ta.rsi(df['adj close'], length=20)
         df['rsi'] = ta.rsi(df['close'], length=14)
         
