@@ -660,7 +660,11 @@ class ColabTradingBot:
         send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
     
     def run(self):
-        """Main bot execution loop with minimal latency"""
+# ========================
+# UPDATED RUN METHOD
+# ========================
+    def run(self):
+        """Main bot execution loop with full context fetching"""
         thread_name = threading.current_thread().name
         logger.info(f"Starting bot thread: {thread_name}")
         
@@ -679,15 +683,6 @@ class ColabTradingBot:
         telegram_sent = send_telegram(start_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
         logger.info(f"Startup message {'sent' if telegram_sent else 'failed to send'}")
         
-        # Initial data fetch
-        logger.info("Fetching initial data...")
-        self.data = fetch_candles(
-            self.timeframe,
-            count=201,
-            api_key=self.credentials['oanda_api_key']
-        )
-        logger.info(f"Initial data fetched: {len(self.data)} records")
-        
         while True:
             try:
                 # Check session time remaining
@@ -702,7 +697,7 @@ class ColabTradingBot:
                 if elapsed > self.max_duration:
                     logger.warning("Session timeout reached, exiting")
                     end_msg = f"🔴 {self.timeframe} bot session ended after 12 hours"
-                    send_Telegram(end_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+                    send_telegram(end_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                     return
                 
                 # Calculate precise wakeup time
@@ -719,31 +714,23 @@ class ColabTradingBot:
                     time.sleep(0.001)  # 1ms precision
                 
                 logger.debug("Candle open detected - waiting 5s for candle availability")
-                # CRITICAL FIX: Wait 5 seconds for the candle to be available
                 time.sleep(5)
-                # Fetch only the new candle
-                last_time = self.data['time'].max() if not self.data.empty else None
+                
+                # Fetch full 201 candles for complete context
+                logger.debug("Fetching full 201 candles for updated context")
                 new_data = fetch_candles(
                     self.timeframe,
-                    last_time=last_time,
-                    count=1,
+                    count=201,
                     api_key=self.credentials['oanda_api_key']
                 )
                 
                 if new_data.empty:
-                    logger.warning("No new candle fetched")
-                    continue
-                
-                # Validate candle is current
-                if new_data.iloc[0]['complete']:
-                    logger.error("Received COMPLETED candle instead of current!")
+                    logger.error("Failed to fetch candle data")
                     continue
                     
-                # Append to existing data
-                self.data = pd.concat([self.data, new_data], ignore_index=True)
-                self.data = self.data.drop_duplicates(subset=['time'], keep='last')
-                self.data = self.data.sort_values('time').tail(201)
-                logger.debug(f"Total records now: {len(self.data)}")
+                # Update the data
+                self.data = new_data
+                logger.debug(f"Total records: {len(self.data)}")
                 
                 # Detect CRT pattern using only current open
                 signal_type, signal_data = self.feature_engineer.calculate_crt_signal(self.data)
