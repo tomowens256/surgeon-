@@ -659,7 +659,7 @@ class ColabTradingBot:
         )
         send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
     
-    def run(self):
+    
 # ========================
 # UPDATED RUN METHOD
 # ========================
