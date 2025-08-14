@@ -746,7 +746,21 @@ class ColabTradingBot:
                 if features is None:
                     logger.warning("Feature generation failed")
                     continue
+                # DEBUG: Send feature details to Telegram
+                feature_debug = (
+                    f"🔍 {self.timeframe} Feature Debug\n"
+                    f"Time: {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"Signal: {signal_type}\n"
+                    f"Entry: {signal_data['entry']:.5f}\n"
+                    "Top Features:\n"
+                )
+            
+                # Get top 10 most significant features
+                top_features = features.abs().sort_values(ascending=False).head(10)
+                for feat, value in top_features.items():
+                    feature_debug += f"{feat}: {value:.4f}\n"
                     
+                send_telegram(feature_debug, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])    
                 # Get prediction
                 prediction = self.model_loader.predict(features)
                 logger.info(f"Prediction: {prediction:.4f}")
