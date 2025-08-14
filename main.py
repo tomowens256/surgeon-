@@ -87,13 +87,6 @@ def setup_colab():
     
     logger.info("Colab environment configured")
     return logger
-    
-    # Set TensorFlow logging level
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-    tf.get_logger().setLevel('ERROR')
-    
-    logger.info("Colab setup completed")
-    return logger
 
 # ========================
 # UTILITY FUNCTIONS
@@ -156,9 +149,9 @@ def send_telegram(message, token, chat_id):
     logger.error(f"Failed to send Telegram message after {max_retries} attempts")
     return False
 
-def fetch_candles(timeframe, last_time=None, api_key=None):
-    """Fetch exactly 201 candles for XAU_USD with full precision and robust error handling"""
-    logger.debug(f"Fetching candles for {timeframe}, last_time: {last_time}")
+def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
+    """Fetch candles for XAU_USD with full precision and robust error handling"""
+    logger.debug(f"Fetching {count} candles for {timeframe}, last_time: {last_time}")
     
     if not api_key:
         logger.error("Oanda API key missing")
@@ -172,7 +165,7 @@ def fetch_candles(timeframe, last_time=None, api_key=None):
         
     params = {
         "granularity": timeframe,
-        "count": 201,
+        "count": count,
         "price": "M",
         "alignmentTimezone": "America/New_York",
         "includeCurrent": True
@@ -259,7 +252,7 @@ class FeatureEngineer:
     def __init__(self, timeframe):
         self.timeframe = timeframe
         logger.debug(f"Initializing FeatureEngineer for {timeframe}")
-        # Base features without minute dummies
+        # Base features in exact order
         self.base_features = [
             'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
             'atr_z', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
@@ -277,7 +270,7 @@ class FeatureEngineer:
             'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
         ]
         
-        # Timeframe-specific minute closed features
+        # Timeframe-specific minute closed features at END
         if timeframe == "M5":
             self.features = self.base_features + [
                 'minutes,closed_0', 'minutes,closed_5', 'minutes,closed_10', 
@@ -295,7 +288,7 @@ class FeatureEngineer:
         self.shift_features = [
             'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
             'atr_z', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100',
-            'vwap', 'vwap_std', 'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_极',
+            'vwap', 'vwap_std', 'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60',
             'trend_strength_up', 'trend_strength_down', 'volume', 'body_size', 
             'wick_up', 'wick_down', 'prev_body_size', 'prev_wick_up', 'prev_wick_down', 
             'is_bad_combo', 'price_div_vol', 'rsi_div_macd', 'price_div_vwap', 
@@ -303,65 +296,45 @@ class FeatureEngineer:
             'rsi_zone_oversold', 'rsi_zone_unknown', 'combo_flag_dead', 'combo_flag_fair',
             'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
         ]
-
- 
         
-    def calculate_crt_signal_vectorized(self, df):
-        """Vectorized CRT signal calculation matching backtesting version"""
+    def calculate_crt_signal(self, df):
+        """Calculate CRT signal at OPEN of current candle (c0) with minimal latency"""
         if len(df) < 3:
             return None, None
             
-        # Create working copy to avoid modifying original
-        df = df.copy()
+        # Use the last COMPLETED candle as c2 (index -2)
+        # c1 = candle at -3, c2 = candle at -2, c0 = current open at -1
+        c1 = df.iloc[-3]
+        c2 = df.iloc[-2]
+        current_open = df.iloc[-1]['open']  # Only need open of current candle
         
-        # Create shifted columns for previous candles
-        df['c1_low'] = df['low'].shift(2)
-        df['c1_high'] = df['high'].shift(2)
-        df['c2_low'] = df['low'].shift(1)
-        df['c2_high'] = df['high'].shift(1)
-        df['c2_close'] = df['close'].shift(1)
+        # Calculate c2 metrics
+        c2_range = c2['high'] - c2['low']
+        c2_mid = c2['low'] + (0.5 * c2_range)
         
-        # Calculate candle metrics
-        df['c2_range'] = df['c2_high'] - df['c2_low']
-        df['c2_mid'] = df['c2_low'] + (0.5 * df['c2_range'])
-        
-        # Vectorized conditions - EXACTLY AS IN BACKTESTING
-        buy_mask = (
-            (df['c2_low'] < df['c1_low']) & 
-            (df['c2_close'] > df['c1_low']) & 
-            (df['open'] > df['c2_mid'])
-        )
-        
-        sell_mask = (
-            (df['c2_high'] > df['c1_high']) & 
-            (df['c2_close'] < df['c1_high']) & 
-            (df['open'] < df['c2_mid'])
-        )
-        
-        # Get the last signal only
-        last_row = df.iloc[-1]
-        
-        if buy_mask.iloc[-1]:
+        # CRT conditions - using ONLY completed candles and current open
+        if (c2['low'] < c1['low'] and 
+            c2['close'] > c1['low'] and 
+            current_open > c2_mid):
             signal_type = 'BUY'
-            entry = last_row['open']
-            sl = last_row['c2_low']
+            entry = current_open
+            sl = c2['low']
             risk = abs(entry - sl)
             tp = entry + 4 * risk
-            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': last_row['time']}
-        elif sell_mask.iloc[-1]:
+            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
+        
+        elif (c2['high'] > c1['high'] and 
+              c2['close'] < c1['high'] and 
+              current_open < c2_mid):
             signal_type = 'SELL'
-            entry = last_row['open']
-            sl = last_row['c2_high']
+            entry = current_open
+            sl = c2['high']
             risk = abs(sl - entry)
             tp = entry - 4 * risk
-            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': last_row['time']}
-        else:
-            return None, None
-        """Vectorized CRT signal calculation with precise indexing"""
-        if len(df) < 3:
-            return None, None
-            
-
+            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
+        
+        return None, None
+        
     def calculate_technical_indicators(self, df):
         """Calculate technical indicators WITHOUT volume imputation"""
         df = df.copy().drop_duplicates(subset=['time'], keep='last')
@@ -371,7 +344,6 @@ class FeatureEngineer:
         df['garman_klass_vol'] = (
             ((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -
             (2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2)
-        )
         df['rsi_20'] = ta.rsi(df['adj close'], length=20)
         df['rsi'] = ta.rsi(df['close'], length=14)
         
@@ -510,6 +482,12 @@ class FeatureEngineer:
             return None
         
         df = df.tail(200).copy()
+        
+        # Set current candle close = open for immediate processing
+        current_candle = df.iloc[-1].copy()
+        current_candle['close'] = current_candle['open']
+        df.iloc[-1] = current_candle
+        
         df = self.calculate_technical_indicators(df)
         df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
         df = self.calculate_categorical_features(df)
@@ -655,14 +633,36 @@ class ColabTradingBot:
             else:
                 next_time = now.replace(minute=next_minute, second=0, microsecond=0)
         
+        # Add network latency compensation
+        next_time += timedelta(seconds=0.3)
+        
         # If we're at the exact candle start, move to next candle
         if now >= next_time:
             next_time += timedelta(minutes=5 if self.timeframe == "M5" else 15)
         
         logger.debug(f"Current time: {now}, Next candle: {next_time}")
         return next_time
+
+    def send_signal(self, signal_type, signal_data, prediction):
+        """Send formatted signal to Telegram with latency measurement"""
+        latency_ms = (datetime.now(NY_TZ) - signal_data['time']).total_seconds() * 1000
+        confidence = "HIGH" if prediction > PREDICTION_THRESHOLD else "LOW"
+        emoji = "🚨" if confidence == "HIGH" else "⚠️"
+        
+        message = (
+            f"{emoji} XAU/USD Signal ({self.timeframe})\n"
+            f"Type: {signal_type}\n"
+            f"Entry: {signal_data['entry']:.5f}\n"
+            f"SL: {signal_data['sl']:.5f}\n"
+            f"TP: {signal_data['tp']:.5f}\n"
+            f"Confidence: {prediction:.4f} ({confidence})\n"
+            f"Latency: {latency_ms:.1f}ms\n"
+            f"Time: {signal_data['time'].strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+    
     def run(self):
-        """Main bot execution loop"""
+        """Main bot execution loop with minimal latency"""
         thread_name = threading.current_thread().name
         logger.info(f"Starting bot thread: {thread_name}")
         
@@ -685,6 +685,7 @@ class ColabTradingBot:
         logger.info("Fetching initial data...")
         self.data = fetch_candles(
             self.timeframe,
+            count=201,
             api_key=self.credentials['oanda_api_key']
         )
         logger.info(f"Initial data fetched: {len(self.data)} records")
@@ -703,88 +704,69 @@ class ColabTradingBot:
                 if elapsed > self.max_duration:
                     logger.warning("Session timeout reached, exiting")
                     end_msg = f"🔴 {self.timeframe} bot session ended after 12 hours"
-                    send_telegram(end_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+                    send_Telegram(end_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                     return
                 
-                # Calculate sleep time to next candle + 5 seconds
+                # Calculate precise wakeup time
                 now = datetime.now(NY_TZ)
                 next_candle = self.calculate_next_candle_time()
-                sleep_seconds = max(1, (next_candle - now).total_seconds() + 5)
+                sleep_seconds = max(0, (next_candle - now).total_seconds() - 0.1)  # Wake 100ms early
                 
-                logger.debug(f"Sleeping for {sleep_seconds:.1f} seconds until next candle")
-                time.sleep(sleep_seconds)
+                if sleep_seconds > 0:
+                    logger.debug(f"Sleeping for {sleep_seconds:.2f} seconds until next candle")
+                    time.sleep(sleep_seconds)
                 
-                # Fetch new data
+                # Busy-wait for precise candle open
+                while datetime.now(NY_TZ) < next_candle:
+                    time.sleep(0.001)  # 1ms precision
+                
+                logger.debug("Candle open detected - fetching new candle")
+                
+                # Fetch only the new candle
                 last_time = self.data['time'].max() if not self.data.empty else None
-                logger.debug(f"Fetching new data since {last_time}")
                 new_data = fetch_candles(
                     self.timeframe,
-                    last_time,
-                    self.credentials['oanda_api_key']
+                    last_time=last_time,
+                    count=1,
+                    api_key=self.credentials['oanda_api_key']
                 )
                 
-                if not new_data.empty:
-                    logger.debug(f"Received {len(new_data)} new records")
-                    self.data = self.data.reset_index(drop=True)
-                    new_data = new_data.reset_index(drop=True)
-                    self.data = pd.concat([self.data, new_data], ignore_index=True)
-                    self.data = self.data.drop_duplicates(subset=['time'], keep='last')
-                    self.data = self.data.sort_values('time').tail(201)
-                    
-                    logger.debug(f"Total records now: {len(self.data)}")
-                else:
-                    logger.warning("No new data fetched")
+                if new_data.empty:
+                    logger.warning("No new candle fetched")
                     continue
                 
-                # Detect CRT pattern
-                logger.debug("Checking for CRT pattern...")
-                signal_type, signal_data = self.feature_engineer.calculate_crt_signal_vectorized(self.data)
+                # Validate candle is current
+                if new_data.iloc[0]['complete']:
+                    logger.error("Received COMPLETED candle instead of current!")
+                    continue
+                    
+                # Append to existing data
+                self.data = pd.concat([self.data, new_data], ignore_index=True)
+                self.data = self.data.drop_duplicates(subset=['time'], keep='last')
+                self.data = self.data.sort_values('time').tail(201)
+                logger.debug(f"Total records now: {len(self.data)}")
+                
+                # Detect CRT pattern using only current open
+                signal_type, signal_data = self.feature_engineer.calculate_crt_signal(self.data)
                 
                 if not signal_type:
                     logger.debug("No CRT pattern detected")
                     continue
                     
-                logger.info(f"CRT pattern detected: {signal_type}")
+                logger.info(f"CRT pattern detected: {signal_type} at {signal_data['time']}")
                 
-                # Generate features
+                # Generate features immediately
                 features = self.feature_engineer.generate_features(self.data, signal_type)
                 if features is None:
                     logger.warning("Feature generation failed")
                     continue
-                feature_debug = (
-                f"🔍 {self.timeframe} Feature Debug\n"
-                f"Time: {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"Signal: {signal_type}\n"
-                f"Entry: {signal_data['entry']:.5f}\n"
-                "Top Features:\n"
-                )
-            
-                # Get top 10 most significant features
-                top_features = features.abs().sort_values(ascending=False)#.head(10)
-                for feat, value in top_features.items():
-                    feature_debug += f"{feat}: {value:.4f}\n"
-                
-                send_telegram(feature_debug, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])    
+                    
                 # Get prediction
-                logger.debug("Getting model prediction...")
                 prediction = self.model_loader.predict(features)
                 logger.info(f"Prediction: {prediction:.4f}")
                 
-                # Send ALL signals (both high and low confidence)
-                confidence_level = "HIGH" if prediction > PREDICTION_THRESHOLD else "LOW"
-                emoji = "🚨" if confidence_level == "HIGH" else "⚠️"
-                
-                message = (
-                    f"{emoji} XAU/USD Signal ({self.timeframe})\n"
-                    f"Type: {signal_type}\n"
-                    f"Entry: {signal_data['entry']:.5f}\n"
-                    f"SL: {signal_data['sl']:.5f}\n"
-                    f"TP: {signal_data['tp']:.5f}\n"
-                    f"Confidence: {prediction:.4f} ({confidence_level})\n"
-                    f"Time: {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-                send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-                logger.info(f"Signal sent ({confidence_level} confidence)")
+                # Send signal immediately
+                self.send_signal(signal_type, signal_data, prediction)
                     
             except Exception as e:
                 error_msg = f"❌ {self.timeframe} bot error: {str(e)}"
@@ -806,8 +788,7 @@ class ColabTradingBot:
         oanda_ok = False
         try:
             logger.debug("Testing Oanda API with small candle request")
-            # REMOVE THE 'count' PARAMETER HERE:
-            test_data = fetch_candles("M5", api_key=self.credentials['oanda_api_key'])
+            test_data = fetch_candles("M5", count=1, api_key=self.credentials['oanda_api_key'])
             oanda_ok = not test_data.empty
             logger.debug(f"Oanda test {'succeeded' if oanda_ok else 'failed'}")
         except Exception as e:
@@ -821,6 +802,7 @@ class ColabTradingBot:
             
         logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok else 'FAIL'}")
         return telegram_ok and oanda_ok
+        
 # ========================
 # MAIN EXECUTION
 # ========================
