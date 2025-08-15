@@ -904,7 +904,7 @@ class ColabTradingBot:
         self.storage.append_signal(
             timeframe=self.timeframe,
             signal_data=signal_data,
-            features=features,
+            #features=features,
             prediction=prediction
         )
     
