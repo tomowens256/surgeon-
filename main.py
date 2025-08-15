@@ -691,6 +691,128 @@ class ModelLoader:
         logger.debug(f"Prediction complete: {prediction}")
         return prediction
 
+
+# ========================
+# IMPROVED GOOGLE SHEETS STORAGE
+# ========================
+class GoogleSheetsStorage:
+    def __init__(self, credentials_file, spreadsheet_id):
+        self.credentials_file = credentials_file
+        self.spreadsheet_id = spreadsheet_id
+        self.logger = logging.getLogger('gsheets')
+        self.service = None
+        self.headers = [
+            'storage_time', 'timeframe', 'signal_time', 'signal_type', 
+            'entry', 'sl', 'tp', 'prediction', 'confidence'
+        ]
+        
+    def connect(self):
+        try:
+            from google.oauth2.service_account import Credentials
+            from googleapiclient.discovery import build
+            
+            scopes = ['https://www.googleapis.com/auth/spreadsheets']
+            creds = Credentials.from_service_account_file(self.credentials_file, scopes=scopes)
+            self.service = build('sheets', 'v4', credentials=creds)
+            return True
+        except Exception as e:
+            self.logger.error(f"Google Sheets connection failed: {str(e)}")
+            return False
+    
+    def ensure_sheet_exists(self, sheet_name):
+        """Create sheet if it doesn't exist"""
+        try:
+            spreadsheet = self.service.spreadsheets().get(
+                spreadsheetId=self.spreadsheet_id).execute()
+            
+            # Check if sheet exists
+            sheet_exists = any(
+                sheet['properties']['title'] == sheet_name 
+                for sheet in spreadsheet['sheets']
+            )
+            
+            if not sheet_exists:
+                body = {
+                    'requests': [{
+                        'addSheet': {
+                            'properties': {'title': sheet_name}
+                        }
+                    }]
+                }
+                self.service.spreadsheets().batchUpdate(
+                    spreadsheetId=self.spreadsheet_id, body=body).execute()
+                
+            return True
+        except Exception as e:
+            self.logger.error(f"Sheet creation failed: {str(e)}")
+            return False
+    
+    def append_signal(self, timeframe, signal_data, features, prediction):
+        """Store signal in both timeframe-specific sheet and combined log"""
+        if not self.service and not self.connect():
+            return False
+            
+        try:
+            # Prepare data row
+            confidence = "HIGH" if prediction > PREDICTION_THRESHOLD else "LOW"
+            base_data = [
+                datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S'),
+                timeframe,
+                signal_data['time'].strftime('%Y-%m-%d %H:%M:%S'),
+                signal_data['signal_type'],
+                signal_data['entry'],
+                signal_data['sl'],
+                signal_data['tp'],
+                prediction,
+                confidence
+            ]
+            
+            # Add all feature values
+            full_row = base_data + features.tolist()
+            
+            # Get full headers (first time only)
+            full_headers = self.headers + features.index.tolist()
+            
+            # Store in timeframe-specific sheet
+            self._append_to_sheet(timeframe, full_headers, full_row)
+            
+            # Store in combined log
+            self._append_to_sheet("All_Signals", full_headers, full_row)
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"Append failed: {str(e)}")
+            return False
+    
+    def _append_to_sheet(self, sheet_name, headers, row):
+        """Internal method to write to specific sheet"""
+        self.ensure_sheet_exists(sheet_name)
+        
+        # Get existing data to check headers
+        range_name = f"{sheet_name}!A:ZZ"
+        result = self.service.spreadsheets().values().get(
+            spreadsheetId=self.spreadsheet_id, range=range_name).execute()
+        values = result.get('values', [])
+        
+        # Write headers if first row
+        if not values:
+            self.service.spreadsheets().values().append(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!A1",
+                valueInputOption='RAW',
+                body={'values': [headers]}
+            ).execute()
+        
+        # Append data row
+        self.service.spreadsheets().values().append(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{sheet_name}!A1",
+            valueInputOption='USER_ENTERED',
+            body={'values': [row]}
+        ).execute()
+
+
+
 # ========================
 # COLAB TRADING BOT
 # ========================
@@ -701,6 +823,12 @@ class ColabTradingBot:
         self.logger = logging.getLogger(f"{timeframe}_bot")
         self.start_time = time.time()
         self.max_duration = 11.5 * 3600
+
+        # In ColabTradingBot __init__
+        self.storage = GoogleSheetsStorage(
+            credentials_file='/path/to/service-account.json',
+            spreadsheet_id='1HZo4uUfeYrzoeEQkjoxwylrqQpKI4R9OfHOZ6zaDino'  # From step 1
+        )
         
         logger.info(f"Initializing {timeframe} bot")
         
@@ -771,6 +899,14 @@ class ColabTradingBot:
             f"Time: {signal_data['time'].strftime('%Y-%m-%d %H:%M:%S')}"
         )
         send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+
+        # In send_signal method
+        self.storage.append_signal(
+            timeframe=self.timeframe,
+            signal_data=signal_data,
+            features=features,
+            prediction=prediction
+        )
     
     
 # ========================
