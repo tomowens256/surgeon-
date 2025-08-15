@@ -882,7 +882,7 @@ class ColabTradingBot:
         logger.debug(f"Current time: {now}, Next candle: {next_time}")
         return next_time
 
-    def send_signal(self, signal_type, signal_data, prediction):
+    def send_signal(self, signal_type, signal_data, prediction, features):
         """Send formatted signal to Telegram with latency measurement"""
         latency_ms = (datetime.now(NY_TZ) - signal_data['time']).total_seconds() * 1000
         confidence = "HIGH" if prediction > PREDICTION_THRESHOLD else "LOW"
@@ -904,7 +904,7 @@ class ColabTradingBot:
         self.storage.append_signal(
             timeframe=self.timeframe,
             signal_data=signal_data,
-            #features=features,
+            features=features,
             prediction=prediction
         )
     
@@ -1014,8 +1014,8 @@ class ColabTradingBot:
                 prediction = self.model_loader.predict(features)
                 logger.info(f"Prediction: {prediction:.4f}")
                 
-                # Send signal immediately
-                self.send_signal(signal_type, signal_data, prediction)
+                # Send signal and journal immediately
+                self.send_signal(signal_type, signal_data, prediction, features)
                     
             except Exception as e:
                 error_msg = f"❌ {self.timeframe} bot error: {str(e)}"
