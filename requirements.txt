@@ -11,3 +11,7 @@ h5py==3.10.0
 python-dotenv==1.1.1
 flask-ngrok==0.0.25
 scikit-learn==1.6.1
+google-api-python-client
+google-auth
+oauth2client
+numpy
