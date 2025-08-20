@@ -1191,21 +1191,15 @@ class ColabTradingBot:
             logger.debug(f"Oanda test {'succeeded' if oanda_ok else 'failed'}")
         except Exception as e:
             logger.error(f"Oanda test failed: {str(e)}")
-        
-        # # Test Google Sheets
-        # sheets_ok = self.test_google_sheets()
             
-        # if not telegram_ok:
-        #     logger.error("Telegram credentials test failed")
+        if not telegram_ok:
+            logger.error("Telegram credentials test failed")
             
-        # if not oanda_ok:
-        #     logger.error("Oanda credentials test failed")
-        
-        # if not sheets_ok:
-        #     logger.error("Google Sheets test failed")
+        if not oanda_ok:
+            logger.error("Oanda credentials test failed")
             
-         logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok  else 'FAIL'}")
-        return telegram_ok and oanda_ok# and sheets_ok
+        logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok else 'FAIL'}")
+        return telegram_ok and oanda_ok
 # ========================
 # MAIN EXECUTION
 # ========================
