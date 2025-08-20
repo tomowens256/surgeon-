@@ -630,7 +630,7 @@ class FeatureEngineer:
             # 1. Determine trend direction with fallbacks
             trend_str = 'sideways'  # Default
             
-            # Use get() method to avoid KeyError
+            # Use get() method to avoid KeyError - THIS IS THE CRITICAL FIX
             downtrend_val = row.get('trend_direction_downtrend', 0)
             sideways_val = row.get('trend_direction_sideways', 0)
             uptrend_val = row.get('trend_direction_uptrend', 0)
