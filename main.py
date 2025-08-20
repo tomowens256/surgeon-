@@ -328,6 +328,7 @@ class FeatureEngineer:
     def __init__(self, timeframe):
         self.timeframe = timeframe
         logger.debug(f"Initializing FeatureEngineer for {timeframe}")
+        
         # Base features in exact order
         self.base_features = [
             'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
@@ -347,6 +348,7 @@ class FeatureEngineer:
         ]
         self.rsi_bins = [0, 20, 30, 40, 50, 60, 70, 80, 100]
         self.macd_z_bins = [-12.386, -0.496, -0.138, 0.134, 0.527, 9.246]
+        
         # Timeframe-specific minute closed features at END
         if timeframe == "M5":
             self.features = self.base_features + [
@@ -376,292 +378,380 @@ class FeatureEngineer:
         
     def calculate_crt_signal(self, df):
         """Calculate CRT signal at OPEN of current candle (c0) with minimal latency"""
-        if len(df) < 3:
-            return None, None
+        try:
+            if len(df) < 3:
+                return None, None
+                
+            # Use the last COMPLETED candle as c2 (index -2)
+            # c1 = candle at -3, c2 = candle at -2, c0 = current open at -1
+            c1 = df.iloc[-3]
+            c2 = df.iloc[-2]
+            current_open = df.iloc[-1]['open']  # Only need open of current candle
             
-        # Use the last COMPLETED candle as c2 (index -2)
-        # c1 = candle at -3, c2 = candle at -2, c0 = current open at -1
-        c1 = df.iloc[-3]
-        c2 = df.iloc[-2]
-        current_open = df.iloc[-1]['open']  # Only need open of current candle
-        
-        # Calculate c2 metrics
-        c2_range = c2['high'] - c2['low']
-        c2_mid = c2['low'] + (0.5 * c2_range)
-        
-        # CRT conditions - using ONLY completed candles and current open
-        if (c2['low'] < c1['low'] and 
-            c2['close'] > c1['low'] and 
-            current_open > c2_mid):
-            signal_type = 'BUY'
-            entry = current_open
-            sl = c2['low']
-            risk = abs(entry - sl)
-            tp = entry + 4 * risk
-            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
-        
-        elif (c2['high'] > c1['high'] and 
-              c2['close'] < c1['high'] and 
-              current_open < c2_mid):
-            signal_type = 'SELL'
-            entry = current_open
-            sl = c2['high']
-            risk = abs(sl - entry)
-            tp = entry - 4 * risk
-            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
-        
-        return None, None
+            # Calculate c2 metrics
+            c2_range = c2['high'] - c2['low']
+            c2_mid = c2['low'] + (0.5 * c2_range)
+            
+            # CRT conditions - using ONLY completed candles and current open
+            if (c2['low'] < c1['low'] and 
+                c2['close'] > c1['low'] and 
+                current_open > c2_mid):
+                signal_type = 'BUY'
+                entry = current_open
+                sl = c2['low']
+                risk = abs(entry - sl)
+                tp = entry + 4 * risk
+                return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
+            
+            elif (c2['high'] > c1['high'] and 
+                  c2['close'] < c1['high'] and 
+                  current_open < c2_mid):
+                signal_type = 'SELL'
+                entry = current_open
+                sl = c2['high']
+                risk = abs(sl - entry)
+                tp = entry - 4 * risk
+                return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
+            
+            return None, None
+        except Exception as e:
+            logger.error(f"Error in calculate_crt_signal: {str(e)}")
+            return None, None
         
     def calculate_technical_indicators(self, df):
         """Calculate technical indicators WITHOUT volume imputation"""
-        df = df.copy().drop_duplicates(subset=['time'], keep='last')
-        
-        # REMOVED VOLUME ESTIMATION - Using shifted features instead
-        df['adj close'] = df['open']
-        df['garman_klass_vol'] = (((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -(2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2))
-        df['rsi_20'] = ta.rsi(df['adj close'], length=20)
-        df['rsi'] = ta.rsi(df['close'], length=14)
-        
-        bb = ta.bbands(np.log1p(df['adj close']), length=20)
-        df['bb_low'] = bb['BBL_20_2.0']
-        df['bb_mid'] = bb['BBM_20_2.0']
-        df['bb_high'] = bb['BBU_20_2.0']
-        
-        atr = ta.atr(df['high'], df['low'], df['close'], length=14)
-        df['atr_z'] = (atr - atr.mean()) / atr.std()
-        
-        macd = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
-        df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
-        
-        df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
-        df['ma_10'] = df['adj close'].rolling(window=10).mean()
-        df['ma_100'] = df['adj close'].rolling(window=100).mean()
-        df['ma_20'] = df['close'].rolling(window=20).mean()
-        df['ma_30'] = df['close'].rolling(window=30).mean()
-        df['ma_40'] = df['close'].rolling(window=40).mean()
-        df['ma_60'] = df['close'].rolling(window=60).mean()
-        
-        vwap_num = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum()
-        vwap_den = df['volume'].cumsum()
-        df['vwap'] = vwap_num / vwap_den
-        df['vwap_std'] = df['vwap'].rolling(window=20).std()
-        
-        return df
+        try:
+            df = df.copy().drop_duplicates(subset=['time'], keep='last')
+            
+            # REMOVED VOLUME ESTIMATION - Using shifted features instead
+            df['adj close'] = df['open']
+            df['garman_klass_vol'] = (((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -(2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2))
+            df['rsi_20'] = ta.rsi(df['adj close'], length=20)
+            df['rsi'] = ta.rsi(df['close'], length=14)
+            
+            bb = ta.bbands(np.log1p(df['adj close']), length=20)
+            df['bb_low'] = bb['BBL_20_2.0']
+            df['bb_mid'] = bb['BBM_20_2.0']
+            df['bb_high'] = bb['BBU_20_2.0']
+            
+            atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+            df['atr_z'] = (atr - atr.mean()) / atr.std()
+            
+            macd = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
+            df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
+            
+            df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
+            df['ma_10'] = df['adj close'].rolling(window=10).mean()
+            df['ma_100'] = df['adj close'].rolling(window=100).mean()
+            df['ma_20'] = df['close'].rolling(window=20).mean()
+            df['ma_30'] = df['close'].rolling(window=30).mean()
+            df['ma_40'] = df['close'].rolling(window=40).mean()
+            df['ma_60'] = df['close'].rolling(window=60).mean()
+            
+            vwap_num = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum()
+            vwap_den = df['volume'].cumsum()
+            df['vwap'] = vwap_num / vwap_den
+            df['vwap_std'] = df['vwap'].rolling(window=20).std()
+            
+            return df
+        except Exception as e:
+            logger.error(f"Error in calculate_technical_indicators: {str(e)}")
+            return df
 
     def calculate_trade_features(self, df, signal_type, entry):
-        df = df.copy()
-        prev_row = df.iloc[-2] if len(df) > 1 else df.iloc[-1]
-        
-        if signal_type == 'SELL':
-            df['sl_price'] = prev_row['high']
-            risk = abs(entry - df['sl_price'].iloc[-1])
-            df['tp_price'] = entry - 4 * risk
-        else:  # BUY
-            df['sl_price'] = prev_row['low']
-            risk = abs(entry - df['sl_price'].iloc[-1])
-            df['tp_price'] = entry + 4 * risk
+        try:
+            df = df.copy()
+            prev_row = df.iloc[-2] if len(df) > 1 else df.iloc[-1]
             
-        df['sl_distance'] = abs(entry - df['sl_price']) * 10
-        df['tp_distance'] = abs(df['tp_price'] - entry) * 10
-        df['rrr'] = df['tp_distance'] / df['sl_distance'].replace(0, np.nan)
-        df['log_sl'] = np.log1p(df['sl_price'])
-        
-        return df
+            if signal_type == 'SELL':
+                df['sl_price'] = prev_row['high']
+                risk = abs(entry - df['sl_price'].iloc[-1])
+                df['tp_price'] = entry - 4 * risk
+            else:  # BUY
+                df['sl_price'] = prev_row['low']
+                risk = abs(entry - df['sl_price'].iloc[-1])
+                df['tp_price'] = entry + 4 * risk
+                
+            df['sl_distance'] = abs(entry - df['sl_price']) * 10
+            df['tp_distance'] = abs(df['tp_price'] - entry) * 10
+            df['rrr'] = df['tp_distance'] / df['sl_distance'].replace(0, np.nan)
+            df['log_sl'] = np.log1p(df['sl_price'])
+            
+            return df
+        except Exception as e:
+            logger.error(f"Error in calculate_trade_features: {str(e)}")
+            return df
 
     def calculate_categorical_features(self, df):
-        df = df.copy()
-        
-        df['day'] = df['time'].dt.day_name()
-        all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Sunday']
-        for day in all_days:
-            df[f'day_{day}'] = 0
-        today = datetime.now(NY_TZ).strftime('%A')
-        df[f'day_{today}'] = 1
-        
-        def get_session(hour):
-            if 0 <= hour < 6:
-                return 'q2'
-            elif 6 <= hour < 12:
-                return 'q3'
-            elif 12 <= hour < 18:
-                return 'q4'
-            else:
-                return 'q1'
-        df['session'] = df['time'].dt.hour.apply(get_session)
-        df = pd.get_dummies(df, columns=['session'], prefix='session', drop_first=False)
-        
-        def rsi_zone(rsi):
-            if pd.isna(rsi):
-                return 'unknown'
-            elif rsi < 30:
-                return 'oversold'
-            elif rsi > 70:
-                return 'overbought'
-            else:
-                return 'neutral'
-        df['rsi_zone'] = df['rsi'].apply(rsi_zone)
-        df = pd.get_dummies(df, columns=['rsi_zone'], prefix='rsi_zone', drop_first=False)
-        
-        def is_bullish_stack(row):
-            return int(row['ma_20'] > row['ma_30'] > row['ma_40'] > row['ma_60'])
-        def is_bearish_stack(row):
-            return int(row['ma_20'] < row['ma_30'] < row['ma_40'] < row['ma_60'])
-        
-        df['trend_strength_up'] = df.apply(is_bullish_stack, axis=1).astype(float)
-        df['trend_strength_down'] = df.apply(is_bearish_stack, axis=1).astype(float)
-        
-        def get_trend(row):
-            if row['trend_strength_up'] > row['trend_strength_down']:
-                return 'uptrend'
-            elif row['trend_strength_down'] > row['trend_strength_up']:
-                return 'downtrend'
-            else:
-                return 'sideways'
-        df['trend_direction'] = df.apply(get_trend, axis=1)
-        df = pd.get_dummies(df, columns=['trend_direction'], prefix='trend_direction', drop_first=False)
-        
-        return df
+        try:
+            df = df.copy()
+            
+            # Day of week features
+            df['day'] = df['time'].dt.day_name()
+            all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Sunday']
+            for day in all_days:
+                df[f'day_{day}'] = 0
+            today = datetime.now(NY_TZ).strftime('%A')
+            df[f'day_{today}'] = 1
+            
+            # Session features
+            def get_session(hour):
+                if 0 <= hour < 6:
+                    return 'q2'
+                elif 6 <= hour < 12:
+                    return 'q3'
+                elif 12 <= hour < 18:
+                    return 'q4'
+                else:
+                    return 'q1'
+                    
+            df['session'] = df['time'].dt.hour.apply(get_session)
+            session_dummies = pd.get_dummies(df['session'], prefix='session')
+            
+            # Ensure all session columns exist
+            expected_session_cols = ['session_q1', 'session_q2', 'session_q3', 'session_q4']
+            for col in expected_session_cols:
+                if col not in session_dummies.columns:
+                    session_dummies[col] = 0
+            
+            df = pd.concat([df, session_dummies], axis=1)
+            df.drop(['session'], axis=1, inplace=True)
+            
+            # RSI zone features
+            def rsi_zone(rsi):
+                if pd.isna(rsi):
+                    return 'unknown'
+                elif rsi < 30:
+                    return 'oversold'
+                elif rsi > 70:
+                    return 'overbought'
+                else:
+                    return 'neutral'
+                    
+            df['rsi_zone'] = df['rsi'].apply(rsi_zone)
+            rsi_dummies = pd.get_dummies(df['rsi_zone'], prefix='rsi_zone')
+            
+            # Ensure all RSI zone columns exist
+            expected_rsi_cols = ['rsi_zone_oversold', 'rsi_zone_overbought', 'rsi_zone_neutral', 'rsi_zone_unknown']
+            for col in expected_rsi_cols:
+                if col not in rsi_dummies.columns:
+                    rsi_dummies[col] = 0
+            
+            df = pd.concat([df, rsi_dummies], axis=1)
+            df.drop(['rsi_zone'], axis=1, inplace=True)
+            
+            # Trend strength features
+            def is_bullish_stack(row):
+                try:
+                    return int(row['ma_20'] > row['ma_30'] > row['ma_40'] > row['ma_60'])
+                except:
+                    return 0
+                    
+            def is_bearish_stack(row):
+                try:
+                    return int(row['ma_20'] < row['ma_30'] < row['ma_40'] < row['ma_60'])
+                except:
+                    return 0
+            
+            df['trend_strength_up'] = df.apply(is_bullish_stack, axis=1).astype(float)
+            df['trend_strength_down'] = df.apply(is_bearish_stack, axis=1).astype(float)
+            
+            # Trend direction features
+            def get_trend(row):
+                try:
+                    if row['trend_strength_up'] > row['trend_strength_down']:
+                        return 'uptrend'
+                    elif row['trend_strength_down'] > row['trend_strength_up']:
+                        return 'downtrend'
+                    else:
+                        return 'sideways'
+                except:
+                    return 'sideways'
+            
+            df['trend_direction'] = df.apply(get_trend, axis=1)
+            trend_dummies = pd.get_dummies(df['trend_direction'], prefix='trend_direction')
+            
+            # Ensure all trend direction columns exist
+            expected_trend_cols = ['trend_direction_downtrend', 'trend_direction_sideways', 'trend_direction_uptrend']
+            for col in expected_trend_cols:
+                if col not in trend_dummies.columns:
+                    trend_dummies[col] = 0
+            
+            df = pd.concat([df, trend_dummies], axis=1)
+            df.drop(['trend_direction'], axis=1, inplace=True)
+            
+            return df
+        except Exception as e:
+            logger.error(f"Error in calculate_categorical_features: {str(e)}")
+            # Return a dataframe with at least the expected columns
+            expected_cols = self.base_features
+            for col in expected_cols:
+                if col not in df.columns:
+                    df[col] = 0
+            return df
 
     def calculate_minutes_closed(self, df):
         """Calculate minutes closed based on actual candle timestamp"""
-        df = df.copy()
-        
-        if self.timeframe == "M5":
-            minute_buckets = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
-            minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
-        else:  # M15 timeframe
-            minute_buckets = [0, 15, 30, 45]
-            minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
+        try:
+            df = df.copy()
             
-        # Initialize all columns to 0
-        for col in minute_cols:
-            df[col] = 0
-        
-        # Get the current candle's minute
-        current_minute = df.iloc[-1]['time'].minute
-        
-        # Calculate bucket based on actual minute of the hour
-        if self.timeframe == "M5":
-            bucket = (current_minute // 5) * 5
-        else:
-            bucket = (current_minute // 15) * 15
+            if self.timeframe == "M5":
+                minute_buckets = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+                minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
+            else:  # M15 timeframe
+                minute_buckets = [0, 15, 30, 45]
+                minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
+                
+            # Initialize all columns to 0
+            for col in minute_cols:
+                df[col] = 0
             
-        bucket_col = f'minutes,closed_{bucket}'
-        if bucket_col in df.columns:
-            df[bucket_col] = 1
+            # Get the current candle's minute
+            current_minute = df.iloc[-1]['time'].minute
             
-        return df
-
+            # Calculate bucket based on actual minute of the hour
+            if self.timeframe == "M5":
+                bucket = (current_minute // 5) * 5
+            else:
+                bucket = (current_minute // 15) * 15
+                
+            bucket_col = f'minutes,closed_{bucket}'
+            if bucket_col in df.columns:
+                df[bucket_col] = 1
+                
+            return df
+        except Exception as e:
+            logger.error(f"Error in calculate_minutes_closed: {str(e)}")
+            return df
 
     def calculate_combo_flags(self, row, signal_type):
         """Calculate combo flags using preloaded dictionaries"""
-        # 1. Determine trend direction
-        trend_str = None
-        if row['trend_direction_downtrend'] == 1:
-            trend_str = 'downtrend'
-        elif row['trend_direction_sideways'] == 1:
-            trend_str = 'sideways'
-        elif row['trend_direction_uptrend'] == 1:
-            trend_str = 'uptrend'
-        else:
+        try:
+            # 1. Determine trend direction with fallbacks
             trend_str = 'sideways'  # Default
-        
-        # 2. Bin RSI value
-        rsi_val = row['rsi']
-        rsi_bin = None
-        for i in range(len(self.rsi_bins)-1):
-            if self.rsi_bins[i] <= rsi_val < self.rsi_bins[i+1]:
-                rsi_bin = f"({self.rsi_bins[i]}, {self.rsi_bins[i+1]}]"
-                break
-        
-        # 3. Bin MACD_Z value
-        macd_z_val = row['macd_z']
-        macd_z_bin = None
-        for i in range(len(self.macd_z_bins)-1):
-            if self.macd_z_bins[i] <= macd_z_val < self.macd_z_bins[i+1]:
-                macd_z_bin = f"({self.macd_z_bins[i]}, {self.macd_z_bins[i+1]}]"
-                break
-        
-        # 4. Create combo keys
-        combo_key = f"{signal_type}_{trend_str}_{rsi_bin}" if rsi_bin else f"{signal_type}_{trend_str}_nan"
-        combo_key2 = f"{signal_type}_{rsi_bin}_{macd_z_bin}" if rsi_bin and macd_z_bin else f"{signal_type}_{rsi_bin}_nan"
-        
-        # 5. Get flags from preloaded dictionaries
-        flag1 = COMBO_FLAGS.get(combo_key, 'dead')
-        flag2 = COMBO_FLAGS2.get(combo_key2, 'dead')
-        
-        # 6. Create flags dictionary
-        return {
-            'combo_flag': flag1,
-            'combo_flag2': flag2,
-            'is_bad_combo': 1 if flag1 == 'dead' else 0
-        }
-    def generate_features(self, df, signal_type):
-        if len(df) < 200:
-            return None
-        
-        df = df.tail(200).copy()
-        
-        # Set current candle close = open for immediate processing
-        current_candle = df.iloc[-1].copy()
-        current_candle['close'] = current_candle['open']
-        df.iloc[-1] = current_candle
-        
-        df = self.calculate_technical_indicators(df)
-        df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
-        df = self.calculate_categorical_features(df)
-        df = self.calculate_minutes_closed(df)
-        
-        # Volume features now rely solely on shifted values
-        df['prev_volume'] = df['volume'].shift(1)
-        df['body_size'] = abs(df['close'] - df['open'])
-        df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
-        df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
-        df['prev_body_size'] = df['body_size'].shift(1)
-        df['prev_wick_up'] = df['wick_up'].shift(1)
-        df['prev_wick_down'] = df['wick_down'].shift(1)
-        
-        df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
-        df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
-        df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
-        df['sl_div_atr'] = df['sl_distance'] / (df['atr_z'] + 1e-6)
-        df['tp_div_atr'] = df['tp_distance'] / (df['atr_z'] + 1e-6)
-        df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
-        
-        current_row = df.iloc[-1]
-        combo_flags = self.calculate_combo_flags(current_row, signal_type)
-        
-        # Set flags in dataframe
-        for flag_type in ['dead', 'fair', 'fine']:
-            df[f'combo_flag_{flag_type}'] = 1 if combo_flags['combo_flag'] == flag_type else 0
-            df[f'combo_flag2_{flag_type}'] = 1 if combo_flags['combo_flag2'] == flag_type else 0
             
-        df['is_bad_combo'] = combo_flags['is_bad_combo']
-        
-        df['crt_BUY'] = int(signal_type == 'BUY')
-        df['crt_SELL'] = int(signal_type == 'SELL')
-        df['trade_type_BUY'] = int(signal_type == 'BUY')
-        df['trade_type_SELL'] = int(signal_type == 'SELL')
-        
-        features = pd.Series(index=self.features, dtype=float)
-        for feat in self.features:
-            if feat in df.columns:
-                features[feat] = df[feat].iloc[-1]
-            else:
-                features[feat] = 0
-        
-        # CRITICAL: Using shifted features instead of volume estimation
-        if len(df) >= 2:
-            prev_candle = df.iloc[-2]
-            for feat in self.shift_features:
-                if feat in features.index and feat in prev_candle:
-                    features[feat] = prev_candle[feat]
-        
-        if features.isna().any():
-            for col in features[features.isna()].index:
-                features[col] = 0
-        
-        return features
+            # Use get() method to avoid KeyError
+            downtrend_val = row.get('trend_direction_downtrend', 0)
+            sideways_val = row.get('trend_direction_sideways', 0)
+            uptrend_val = row.get('trend_direction_uptrend', 0)
+            
+            if downtrend_val == 1:
+                trend_str = 'downtrend'
+            elif uptrend_val == 1:
+                trend_str = 'uptrend'
+            elif sideways_val == 1:
+                trend_str = 'sideways'
+            
+            # 2. Bin RSI value
+            rsi_val = row.get('rsi', 50)  # Default to 50 if missing
+            rsi_bin = None
+            for i in range(len(self.rsi_bins)-1):
+                if self.rsi_bins[i] <= rsi_val < self.rsi_bins[i+1]:
+                    rsi_bin = f"({self.rsi_bins[i]}, {self.rsi_bins[i+1]}]"
+                    break
+            
+            # 3. Bin MACD_Z value
+            macd_z_val = row.get('macd_z', 0)  # Default to 0 if missing
+            macd_z_bin = None
+            for i in range(len(self.macd_z_bins)-1):
+                if self.macd_z_bins[i] <= macd_z_val < self.macd_z_bins[i+1]:
+                    macd_z_bin = f"({self.macd_z_bins[i]}, {self.macd_z_bins[i+1]}]"
+                    break
+            
+            # 4. Create combo keys
+            combo_key = f"{signal_type}_{trend_str}_{rsi_bin}" if rsi_bin else f"{signal_type}_{trend_str}_nan"
+            combo_key2 = f"{signal_type}_{rsi_bin}_{macd_z_bin}" if rsi_bin and macd_z_bin else f"{signal_type}_{rsi_bin}_nan"
+            
+            # 5. Get flags from preloaded dictionaries
+            flag1 = COMBO_FLAGS.get(combo_key, 'dead')
+            flag2 = COMBO_FLAGS2.get(combo_key2, 'dead')
+            
+            # 6. Create flags dictionary
+            return {
+                'combo_flag': flag1,
+                'combo_flag2': flag2,
+                'is_bad_combo': 1 if flag1 == 'dead' else 0
+            }
+        except Exception as e:
+            logger.error(f"Error in calculate_combo_flags: {str(e)}")
+            # Return default values on error
+            return {
+                'combo_flag': 'dead',
+                'combo_flag2': 'dead',
+                'is_bad_combo': 1
+            }
+
+    def generate_features(self, df, signal_type):
+        try:
+            if len(df) < 200:
+                logger.warning("Not enough data for feature generation")
+                return None
+            
+            df = df.tail(200).copy()
+            
+            # Set current candle close = open for immediate processing
+            current_candle = df.iloc[-1].copy()
+            current_candle['close'] = current_candle['open']
+            df.iloc[-1] = current_candle
+            
+            df = self.calculate_technical_indicators(df)
+            df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
+            df = self.calculate_categorical_features(df)
+            df = self.calculate_minutes_closed(df)
+            
+            # Volume features now rely solely on shifted values
+            df['prev_volume'] = df['volume'].shift(1)
+            df['body_size'] = abs(df['close'] - df['open'])
+            df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
+            df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
+            df['prev_body_size'] = df['body_size'].shift(1)
+            df['prev_wick_up'] = df['wick_up'].shift(1)
+            df['prev_wick_down'] = df['wick_down'].shift(1)
+            
+            df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
+            df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
+            df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
+            df['sl_div_atr'] = df['sl_distance'] / (df['atr_z'] + 1e-6)
+            df['tp_div_atr'] = df['tp_distance'] / (df['atr_z'] + 1e-6)
+            df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
+            
+            current_row = df.iloc[-1]
+            combo_flags = self.calculate_combo_flags(current_row, signal_type)
+            
+            # Set flags in dataframe
+            for flag_type in ['dead', 'fair', 'fine']:
+                df[f'combo_flag_{flag_type}'] = 1 if combo_flags['combo_flag'] == flag_type else 0
+                df[f'combo_flag2_{flag_type}'] = 1 if combo_flags['combo_flag2'] == flag_type else 0
+                
+            df['is_bad_combo'] = combo_flags['is_bad_combo']
+            
+            df['crt_BUY'] = int(signal_type == 'BUY')
+            df['crt_SELL'] = int(signal_type == 'SELL')
+            df['trade_type_BUY'] = int(signal_type == 'BUY')
+            df['trade_type_SELL'] = int(signal_type == 'SELL')
+            
+            features = pd.Series(index=self.features, dtype=float)
+            for feat in self.features:
+                if feat in df.columns:
+                    features[feat] = df[feat].iloc[-1]
+                else:
+                    features[feat] = 0
+            
+            # CRITICAL: Using shifted features instead of volume estimation
+            if len(df) >= 2:
+                prev_candle = df.iloc[-2]
+                for feat in self.shift_features:
+                    if feat in features.index and feat in prev_candle:
+                        features[feat] = prev_candle[feat]
+            
+            if features.isna().any():
+                for col in features[features.isna()].index:
+                    features[col] = 0
+            
+            return features
+        except Exception as e:
+            logger.error(f"Error in generate_features: {str(e)}")
+            return None
 
 
 # ========================
