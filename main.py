@@ -1204,7 +1204,7 @@ class ColabTradingBot:
         # if not sheets_ok:
         #     logger.error("Google Sheets test failed")
             
-         logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok  else 'FAIL'}")#and sheets_ok
+         logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok  else 'FAIL'}")
         return telegram_ok and oanda_ok# and sheets_ok
 # ========================
 # MAIN EXECUTION
