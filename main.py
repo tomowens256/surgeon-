@@ -770,8 +770,8 @@ class FeatureEngineer:
             
             # Set flags in dataframe
             for flag_type in ['dead', 'fair', 'fine']:
-                df[f'combo_flag_{flag_type'] = 1 if combo_flags['combo_flag'] == flag_type else 0
-                df[f'combo_flag2_{flag_type'] = 1 if combo_flags['combo_flag2'] == flag_type else 0
+                df[f'combo_flag_{flag_type}'] = 1 if combo_flags['combo_flag'] == flag_type else 0
+                df[f'combo_flag2_{flag_type}'] = 1 if combo_flags['combo_flag2'] == flag_type else 0
                 
             df['is_bad_combo'] = combo_flags['is_bad_combo']
             
