@@ -1,16 +1,16 @@
-tensorflow>=2.16.1  # Or use the latest stable version
+tensorflow>=2.19.0  # Use Colab's pre-installed version
 pandas>=2.2.2  # Matches Colab's version
 pandas_ta>=0.4.71b0  # Latest available version
 oandapyV20==0.7.2
 requests==2.32.3
 python-telegram-bot==21.0.1
 joblib==1.4.2
-protobuf>=3.20.3  # Allow flexibility for TensorFlow compatibility
-h5py==3.10.0
+protobuf>=3.20.3  # Allow newer versions for compatibility
+h5py>=3.10.0  # Flexible version for TensorFlow compatibility
 python-dotenv==1.1.1
 flask-ngrok==0.0.25
 scikit-learn==1.6.1
 google-api-python-client
 google-auth
 oauth2client
-numpy>=1.24.3  # Pin to a compatible version
+numpy>=1.24.3  # Compatible with TensorFlow 2.19.0
