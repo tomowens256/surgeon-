@@ -52,15 +52,16 @@ import tensorflow as tf
 from google.colab import drive
 from IPython.display import clear_output
 
-# SUPPRESS NUMBA DEBUG OUTPUT
-import numba
-numba.set_log_level(30)  # WARNING level only
+import logging
+logging.getLogger('numba').setLevel(logging.WARNING)
 
 # ========================
 # SUPPRESS TENSORFLOW LOGS
 # ========================
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 tf.get_logger().setLevel('ERROR')
+
+
 
 # ========================
 # CONSTANTS & CONFIG
@@ -86,6 +87,11 @@ logging.basicConfig(
         logging.FileHandler('trading_bot_debug.log')
     ]
 )
+numba_logger = logging.getLogger('numba')
+numba_logger.setLevel(logging.WARNING)  # Change to INFO if you need Numba messages
+
+# Optional: Use environment variable for internal Numba controls
+os.environ['NUMBA_DEBUG'] = '0'
 logger = logging.getLogger(__name__)
 
 # Precomputed combo_flags dictionary
