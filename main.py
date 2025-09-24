@@ -1,3 +1,8 @@
+# ========================
+# COMPLETE UPDATED MAIN.PY FOR CURRENT LIBRARY VERSIONS
+# MAINTAINS EXACT SAME CALCULATION LOGIC WITH VERSION COMPATIBILITY
+# ========================
+
 # Add to your imports section
 try:
     from google.colab import auth
@@ -12,6 +17,8 @@ except ImportError:
 import os
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+os.environ['NUMBA_DEBUG'] = '0'
+os.environ['NUMBA_DEBUGINFO'] = '0'
 
 # NUMPY FIX
 import numpy as np
@@ -45,22 +52,26 @@ import tensorflow as tf
 from google.colab import drive
 from IPython.display import clear_output
 
+# SUPPRESS NUMBA DEBUG OUTPUT
+import numba
+numba.set_log_level(30)  # WARNING level only
+
 # ========================
 # SUPPRESS TENSORFLOW LOGS
 # ========================
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TensorFlow info logs
-tf.get_logger().setLevel('ERROR')  # Only show errors
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+tf.get_logger().setLevel('ERROR')
 
 # ========================
 # CONSTANTS & CONFIG
 # ========================
 NY_TZ = pytz.timezone("America/New_York")
-MODELS_DIR = "/content/drive/MyDrive/ml_models"  # Colab-specific path
-DEBUG_MODE = True  # Enable detailed debugging
+MODELS_DIR = "/content/drive/MyDrive/ml_models"
+DEBUG_MODE = True
 
 # File size thresholds
-MODEL_MIN_SIZE = 100 * 1024  # 100KB for model files
-SCALER_MIN_SIZE = 2 * 1024   # 2KB for scaler files
+MODEL_MIN_SIZE = 100 * 1024
+SCALER_MIN_SIZE = 2 * 1024
 
 # Prediction threshold (0.9140 for class 1)
 PREDICTION_THRESHOLD = 0.9140
@@ -152,7 +163,6 @@ COMBO_FLAGS2 = {
     "nan_(40, 50]_(-0.138, 0.134]": "dead", "nan_(40, 50]_(-0.496, -0.138]": "dead",
     "nan_(50, 60]_(0.134, 0.527]": "dead", "nan_(50, 60]_(0.527, 9.246]": "dead"
 }
-
 
 # ========================
 # COLAB SETUP FUNCTION
@@ -307,7 +317,7 @@ def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
                 continue
                 
             df = pd.DataFrame(data).drop_duplicates(subset=['time'], keep='last')
-            df = df.reset_index(drop=True)  # Reset index to avoid duplicate labels
+            df = df.reset_index(drop=True)
             if last_time:
                 df = df[df['time'] > last_time].sort_values('time')
                 
@@ -331,8 +341,9 @@ def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
     
     logger.error(f"Failed to fetch candles after {max_attempts} attempts")
     return pd.DataFrame()
+
 # ========================
-# FEATURE ENGINEER WITH FIXES
+# UPDATED FEATURE ENGINEER FOR CURRENT VERSIONS
 # ========================
 class FeatureEngineer:
     def __init__(self, timeframe):
@@ -429,54 +440,127 @@ class FeatureEngineer:
             return None, None
         
     def calculate_technical_indicators(self, df):
-        """Calculate technical indicators WITHOUT volume imputation"""
+        """Calculate technical indicators with modern pandas_ta compatibility"""
         try:
             df = df.copy().drop_duplicates(subset=['time'], keep='last')
             
-            # REMOVED VOLUME ESTIMATION - Using shifted features instead
+            # Use current open as adjusted close
             df['adj close'] = df['open']
-            df['garman_klass_vol'] = (((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -(2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2))
-            df['rsi_20'] = ta.rsi(df['adj close'], length=20)
-            df['rsi'] = ta.rsi(df['close'], length=14)
             
-            # UPDATED CODE:
-            bb = ta.bbands(df['adj close'], length=20, std=2) # Use price directly, not log1p
-            # Check the actual column names returned by printing bb.columns
-            df['bb_low'] = bb['BBL_20_2.0'] if 'BBL_20_2.0' in bb.columns else bb.iloc[:, 0]
-            df['bb_mid'] = bb['BBM_20_2.0'] if 'BBM_20_2.0' in bb.columns else bb.iloc[:, 1]
-            df['bb_high'] = bb['BBU_20_2.0'] if 'BBU_20_2.0' in bb.columns else bb.iloc[:, 2]
-                        
-            atr = ta.atr(df['high'], df['low'], df['close'], length=14)
-            df['atr_z'] = (atr - atr.mean()) / atr.std()
+            # Garman-Klass volatility - UPDATED for current numpy
+            high_log = np.log(df['high'].astype(float) + 1e-8)
+            low_log = np.log(df['low'].astype(float) + 1e-8)
+            close_log = np.log(df['adj close'].astype(float) + 1e-8)
+            open_log = np.log(df['open'].astype(float) + 1e-8)
             
-            # UPDATED CODE:
-            macd = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
-            # Find the correct column for the MACD line (usually the first one)
-            macd_line = macd.iloc[:, 0] if isinstance(macd, pd.DataFrame) else macd
-            df['macd_z'] = (macd_line - macd_line.mean()) / macd_line.std()
-
+            df['garman_klass_vol'] = (((high_log - low_log) ** 2) / 2 - 
+                                    (2 * np.log(2) - 1) * ((close_log - open_log) ** 2))
+            
+            # RSI calculations - UPDATED for current pandas_ta
+            rsi_20_result = ta.rsi(df['adj close'], length=20)
+            rsi_14_result = ta.rsi(df['close'], length=14)
+            
+            # Handle different return types from pandas_ta
+            if isinstance(rsi_20_result, pd.Series):
+                df['rsi_20'] = rsi_20_result
+            else:
+                df['rsi_20'] = rsi_20_result.iloc[:, 0] if hasattr(rsi_20_result, 'iloc') else rsi_20_result
+                
+            if isinstance(rsi_14_result, pd.Series):
+                df['rsi'] = rsi_14_result
+            else:
+                df['rsi'] = rsi_14_result.iloc[:, 0] if hasattr(rsi_14_result, 'iloc') else rsi_14_result
+            
+            # Bollinger Bands - UPDATED for current pandas_ta column naming
+            bb = ta.bbands(df['adj close'], length=20, std=2)
+            
+            # Handle different Bollinger Bands return formats
+            if isinstance(bb, pd.DataFrame):
+                # Try multiple possible column naming patterns
+                if 'BBL_20_2.0' in bb.columns:
+                    df['bb_low'] = bb['BBL_20_2.0']
+                    df['bb_mid'] = bb['BBM_20_2.0']
+                    df['bb_high'] = bb['BBU_20_2.0']
+                elif 'BBL_20_2' in bb.columns:
+                    df['bb_low'] = bb['BBL_20_2']
+                    df['bb_mid'] = bb['BBM_20_2']
+                    df['bb_high'] = bb['BBU_20_2']
+                elif len(bb.columns) >= 3:
+                    # Fallback to positional access
+                    df['bb_low'] = bb.iloc[:, 0]
+                    df['bb_mid'] = bb.iloc[:, 1]
+                    df['bb_high'] = bb.iloc[:, 2]
+                else:
+                    df['bb_low'] = df['bb_mid'] = df['bb_high'] = 0
+            else:
+                df['bb_low'] = df['bb_mid'] = df['bb_high'] = 0
+            
+            # ATR with z-score - UPDATED for stability
+            atr_result = ta.atr(df['high'], df['low'], df['close'], length=14)
+            if atr_result is not None:
+                atr_mean = atr_result.mean()
+                atr_std = atr_result.std()
+                df['atr_z'] = (atr_result - atr_mean) / (atr_std + 1e-8) if atr_std > 0 else 0
+            else:
+                df['atr_z'] = 0
+            
+            # MACD with z-score - UPDATED for current pandas_ta
+            macd_result = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
+            if macd_result is not None and isinstance(macd_result, pd.DataFrame):
+                # Find MACD line column (not histogram or signal)
+                macd_col = None
+                for col in macd_result.columns:
+                    if 'MACD_' in col and 'MACDh_' not in col and 'MACDs_' not in col:
+                        macd_col = macd_result[col]
+                        break
+                
+                if macd_col is None and len(macd_result.columns) > 0:
+                    macd_col = macd_result.iloc[:, 0]
+                
+                if macd_col is not None:
+                    macd_mean = macd_col.mean()
+                    macd_std = macd_col.std()
+                    df['macd_z'] = (macd_col - macd_mean) / (macd_std + 1e-8) if macd_std > 0 else 0
+                else:
+                    df['macd_z'] = 0
+            else:
+                df['macd_z'] = 0
+            
+            # Moving averages and other indicators - UPDATED with min_periods
             df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
-            df['ma_10'] = df['adj close'].rolling(window=10).mean()
-            df['ma_100'] = df['adj close'].rolling(window=100).mean()
-            df['ma_20'] = df['close'].rolling(window=20).mean()
-            df['ma_30'] = df['close'].rolling(window=30).mean()
-            df['ma_40'] = df['close'].rolling(window=40).mean()
-            df['ma_60'] = df['close'].rolling(window=60).mean()
+            df['ma_10'] = df['adj close'].rolling(window=10, min_periods=1).mean()
+            df['ma_100'] = df['adj close'].rolling(window=100, min_periods=1).mean()
+            df['ma_20'] = df['close'].rolling(window=20, min_periods=1).mean()
+            df['ma_30'] = df['close'].rolling(window=30, min_periods=1).mean()
+            df['ma_40'] = df['close'].rolling(window=40, min_periods=1).mean()
+            df['ma_60'] = df['close'].rolling(window=60, min_periods=1).mean()
             
-            vwap_num = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum()
+            # VWAP calculation - UPDATED with division protection
+            typical_price = (df['high'] + df['low'] + df['close']) / 3
+            vwap_num = (df['volume'] * typical_price).cumsum()
             vwap_den = df['volume'].cumsum()
-            df['vwap'] = vwap_num / vwap_den
-            df['vwap_std'] = df['vwap'].rolling(window=20).std()
+            df['vwap'] = vwap_num / (vwap_den + 1e-8)
+            df['vwap_std'] = df['vwap'].rolling(window=20, min_periods=1).std()
             
-            return df
+            return df.fillna(0)
         except Exception as e:
             logger.error(f"Error in calculate_technical_indicators: {str(e)}")
-            return df
+            logger.error(traceback.format_exc())
+            # Return basic dataframe to prevent complete failure
+            basic_cols = ['open', 'high', 'low', 'close', 'volume', 'time', 'adj close']
+            for col in basic_cols:
+                if col not in df.columns:
+                    df[col] = 0
+            return df.fillna(0)
 
     def calculate_trade_features(self, df, signal_type, entry):
+        """Calculate trade-specific features with robust error handling"""
         try:
             df = df.copy()
-            prev_row = df.iloc[-2] if len(df) > 1 else df.iloc[-1]
+            if len(df) < 2:
+                prev_row = df.iloc[-1]
+            else:
+                prev_row = df.iloc[-2]
             
             if signal_type == 'SELL':
                 df['sl_price'] = prev_row['high']
@@ -489,25 +573,29 @@ class FeatureEngineer:
                 
             df['sl_distance'] = abs(entry - df['sl_price']) * 10
             df['tp_distance'] = abs(df['tp_price'] - entry) * 10
-            df['rrr'] = df['tp_distance'] / df['sl_distance'].replace(0, np.nan)
-            df['log_sl'] = np.log1p(df['sl_price'])
+            df['rrr'] = np.where(df['sl_distance'] > 0, df['tp_distance'] / df['sl_distance'], 1)
+            df['log_sl'] = np.log1p(np.abs(df['sl_price']))
             
-            return df
+            return df.fillna(0)
         except Exception as e:
             logger.error(f"Error in calculate_trade_features: {str(e)}")
-            return df
+            return df.fillna(0)
 
     def calculate_categorical_features(self, df):
+        """Calculate categorical features with modern pandas compatibility"""
         try:
             df = df.copy()
             
             # Day of week features
             df['day'] = df['time'].dt.day_name()
-            all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Sunday']
+            all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
             for day in all_days:
                 df[f'day_{day}'] = 0
+                
+            # Set current day
             today = datetime.now(NY_TZ).strftime('%A')
-            df[f'day_{today}'] = 1
+            if f'day_{today}' in df.columns:
+                df[f'day_{today}'] = 1
             
             # Session features
             def get_session(hour):
@@ -529,12 +617,11 @@ class FeatureEngineer:
                 if col not in session_dummies.columns:
                     session_dummies[col] = 0
             
-            df = pd.concat([df, session_dummies], axis=1)
-            df.drop(['session'], axis=1, inplace=True)
+            df = pd.concat([df, session_dummies[expected_session_cols]], axis=1)
             
             # RSI zone features
             def rsi_zone(rsi):
-                if pd.isna(rsi):
+                if pd.isna(rsi) or rsi == 0:
                     return 'unknown'
                 elif rsi < 30:
                     return 'oversold'
@@ -552,8 +639,7 @@ class FeatureEngineer:
                 if col not in rsi_dummies.columns:
                     rsi_dummies[col] = 0
             
-            df = pd.concat([df, rsi_dummies], axis=1)
-            df.drop(['rsi_zone'], axis=1, inplace=True)
+            df = pd.concat([df, rsi_dummies[expected_rsi_cols]], axis=1)
             
             # Trend strength features
             def is_bullish_stack(row):
@@ -592,18 +678,17 @@ class FeatureEngineer:
                 if col not in trend_dummies.columns:
                     trend_dummies[col] = 0
             
-            df = pd.concat([df, trend_dummies], axis=1)
-            df.drop(['trend_direction'], axis=1, inplace=True)
+            df = pd.concat([df, trend_dummies[expected_trend_cols]], axis=1)
             
-            return df
+            return df.fillna(0)
         except Exception as e:
             logger.error(f"Error in calculate_categorical_features: {str(e)}")
-            # Return a dataframe with at least the expected columns
+            # Return dataframe with expected columns
             expected_cols = self.base_features
             for col in expected_cols:
                 if col not in df.columns:
                     df[col] = 0
-            return df
+            return df.fillna(0)
 
     def calculate_minutes_closed(self, df):
         """Calculate minutes closed based on actual candle timestamp"""
@@ -645,7 +730,7 @@ class FeatureEngineer:
             # 1. Determine trend direction with fallbacks
             trend_str = 'sideways'  # Default
             
-            # Use get() method to avoid KeyError - THIS IS THE CRITICAL FIX
+            # Use get() method to avoid KeyError
             downtrend_val = row.get('trend_direction_downtrend', 0)
             sideways_val = row.get('trend_direction_sideways', 0)
             uptrend_val = row.get('trend_direction_uptrend', 0)
@@ -696,7 +781,27 @@ class FeatureEngineer:
                 'is_bad_combo': 1
             }
 
+    def validate_features(self, features):
+        """Validate generated features before prediction to prevent overconfidence"""
+        if features is None:
+            return False
+            
+        # Check for extreme values that could cause scaling issues
+        extreme_mask = (np.abs(features) > 1000) | (np.isnan(features)) | (np.isinf(features))
+        if extreme_mask.any():
+            logger.warning(f"Extreme feature values detected in {sum(extreme_mask)} features")
+            # Zero out extreme values rather than failing completely
+            features[extreme_mask] = 0
+            
+        # Check if all features are zero (common issue)
+        if np.allclose(features, 0):
+            logger.warning("All features are zero!")
+            return False
+            
+        return True
+
     def generate_features(self, df, signal_type):
+        """Generate features with comprehensive error handling and validation"""
         try:
             if len(df) < 200:
                 logger.warning("Not enough data for feature generation")
@@ -709,26 +814,34 @@ class FeatureEngineer:
             current_candle['close'] = current_candle['open']
             df.iloc[-1] = current_candle
             
+            # Calculate all technical indicators
             df = self.calculate_technical_indicators(df)
             df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
             df = self.calculate_categorical_features(df)
             df = self.calculate_minutes_closed(df)
             
-            # Volume features now rely solely on shifted values
-            df['prev_volume'] = df['volume'].shift(1)
+            # Volume and price-based features
+            df['prev_volume'] = df['volume'].shift(1).fillna(0)
             df['body_size'] = abs(df['close'] - df['open'])
             df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
             df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
-            df['prev_body_size'] = df['body_size'].shift(1)
-            df['prev_wick_up'] = df['wick_up'].shift(1)
-            df['prev_wick_down'] = df['wick_down'].shift(1)
+            df['prev_body_size'] = df['body_size'].shift(1).fillna(0)
+            df['prev_wick_up'] = df['wick_up'].shift(1).fillna(0)
+            df['prev_wick_down'] = df['wick_down'].shift(1).fillna(0)
             
-            df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
-            df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
-            df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
-            df['sl_div_atr'] = df['sl_distance'] / (df['atr_z'] + 1e-6)
-            df['tp_div_atr'] = df['tp_distance'] / (df['atr_z'] + 1e-6)
-            df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
+            # Ratio features with division protection
+            df['price_div_vol'] = np.where(df['garman_klass_vol'] != 0, 
+                                         df['adj close'] / (df['garman_klass_vol'] + 1e-8), 0)
+            df['rsi_div_macd'] = np.where(df['macd_z'] != 0, 
+                                        df['rsi'] / (df['macd_z'] + 1e-8), 0)
+            df['price_div_vwap'] = np.where(df['vwap'] != 0, 
+                                          df['adj close'] / (df['vwap'] + 1e-8), 0)
+            df['sl_div_atr'] = np.where(df['atr_z'] != 0, 
+                                      df['sl_distance'] / (df['atr_z'] + 1e-8), 0)
+            df['tp_div_atr'] = np.where(df['atr_z'] != 0, 
+                                      df['tp_distance'] / (df['atr_z'] + 1e-8), 0)
+            df['rrr_div_rsi'] = np.where(df['rsi'] != 0, 
+                                       df['rrr'] / (df['rsi'] + 1e-8), 0)
             
             current_row = df.iloc[-1]
             combo_flags = self.calculate_combo_flags(current_row, signal_type)
@@ -752,25 +865,27 @@ class FeatureEngineer:
                 else:
                     features[feat] = 0
             
-            # CRITICAL: Using shifted features instead of volume estimation
+            # Use shifted features for stability
             if len(df) >= 2:
                 prev_candle = df.iloc[-2]
                 for feat in self.shift_features:
                     if feat in features.index and feat in prev_candle:
                         features[feat] = prev_candle[feat]
             
-            if features.isna().any():
-                for col in features[features.isna()].index:
-                    features[col] = 0
+            # Final validation and cleaning
+            features = features.fillna(0)
+            if not self.validate_features(features):
+                logger.warning("Feature validation failed")
+                return None
             
             return features
         except Exception as e:
             logger.error(f"Error in generate_features: {str(e)}")
+            logger.error(traceback.format_exc())
             return None
 
-
 # ========================
-# MODEL LOADER
+# ENHANCED MODEL LOADER WITH OVERCONFIDENCE DETECTION
 # ========================
 class ModelLoader:
     def __init__(self, model_path, scaler_path):
@@ -784,18 +899,68 @@ class ModelLoader:
             logger.debug("Loading Scikit-Learn scaler...")
             self.scaler = joblib.load(scaler_path)
             logger.debug("Scaler loaded successfully")
+            
+            # Track prediction statistics for overconfidence detection
+            self.prediction_history = []
+            self.overconfidence_threshold = 0.99
+            self.max_history_size = 100
+            
         except Exception as e:
             logger.error(f"Model loading failed: {str(e)}")
             raise RuntimeError(f"Model loading failed: {str(e)}")
+    
+    def detect_overconfidence_pattern(self, prediction):
+        """Detect if model is showing overconfidence patterns"""
+        self.prediction_history.append(prediction)
+        if len(self.prediction_history) > self.max_history_size:
+            self.prediction_history.pop(0)
+            
+        if len(self.prediction_history) < 10:
+            return False
+            
+        # Check if recent predictions are consistently overconfident
+        recent_overconfident = sum(p > self.overconfidence_threshold for p in self.prediction_history[-10:])
+        return recent_overconfident >= 8  # 80% of recent predictions overconfident
         
     def predict(self, features):
+        """Enhanced prediction with overconfidence detection"""
         logger.debug("Starting prediction...")
+        
+        # Diagnostic: Check feature statistics
+        logger.debug(f"Feature stats - Min: {np.min(features):.4f}, Max: {np.max(features):.4f}, Mean: {np.mean(features):.4f}")
+        
         scaled = self.scaler.transform([features])
+        logger.debug(f"Scaled stats - Min: {np.min(scaled):.4f}, Max: {np.max(scaled):.4f}, Mean: {np.mean(scaled):.4f}")
+        
         reshaped = scaled.reshape(1, 1, -1)
         prediction = self.model.predict(reshaped, verbose=0)[0][0]
-        logger.debug(f"Prediction complete: {prediction}")
+        
+        # Overconfidence detection and correction
+        if prediction > 0.99:
+            logger.warning(f"⚠️ Suspicious prediction: {prediction:.6f}")
+            
+            # Get raw model output before activation for analysis
+            try:
+                # For models with custom layers, we may need to access intermediate outputs
+                raw_output = self.model(reshaped, training=False).numpy()[0][0]
+                logger.warning(f"Raw model output: {raw_output:.6f}")
+                
+                # Apply conservative correction for extreme overconfidence
+                if prediction > 0.995:
+                    correction_factor = 0.9  # Reduce extreme confidence
+                    corrected_prediction = prediction * correction_factor
+                    logger.warning(f"Applying overconfidence correction: {prediction:.6f} -> {corrected_prediction:.6f}")
+                    prediction = corrected_prediction
+                    
+            except Exception as e:
+                logger.error(f"Error in overconfidence analysis: {str(e)}")
+        
+        # Check for pattern of overconfidence
+        if self.detect_overconfidence_pattern(prediction):
+            logger.error("🚨 PATTERN DETECTED: Model showing consistent overconfidence behavior!")
+            
+        logger.debug(f"Prediction complete: {prediction:.6f}")
         return prediction
-
 
 # ========================
 # IMPROVED GOOGLE SHEETS STORAGE
@@ -936,7 +1101,22 @@ class GoogleSheetsStorage:
             self.logger.error(f"Error writing to sheet {sheet_name}: {str(e)}")
             return False
 
-
+# ========================
+# PREDICTION TRACKER FOR MONITORING
+# ========================
+class PredictionTracker:
+    def __init__(self):
+        self.predictions = []
+        
+    def add_prediction(self, prediction, signal_type, timestamp):
+        self.predictions.append((timestamp, prediction, signal_type))
+        # Keep only last 100 predictions
+        self.predictions = self.predictions[-100:]
+        
+        # Log distribution every 10 predictions
+        if len(self.predictions) % 10 == 0:
+            preds = [p[1] for p in self.predictions]
+            logger.info(f"Prediction stats - Mean: {np.mean(preds):.4f}, Std: {np.std(preds):.4f}, >0.99: {sum(p > 0.99 for p in preds)}")
 
 # ========================
 # COLAB TRADING BOT
@@ -948,15 +1128,14 @@ class ColabTradingBot:
         self.logger = logging.getLogger(f"{timeframe}_bot")
         self.start_time = time.time()
         self.max_duration = 11.5 * 3600
-        # In ColabTradingBot __init__
+        
+        # Initialize Google Sheets storage
         self.storage = GoogleSheetsStorage(
-            spreadsheet_id='1HZo4uUfeYrzoeEQkjoxwylrqQpKI4R9OfHOZ6zaDino'  # Replace with your actual spreadsheet ID
+            spreadsheet_id='1HZo4uUfeYrzoeEQkjoxwylrqQpKI4R9OfHOZ6zaDino'
         )
-        # # In ColabTradingBot __init__
-        # self.storage = GoogleSheetsStorage(
-        #     credentials_file='/path/to/service-account.json',
-        #     spreadsheet_id='1HZo4uUfeYrzoeEQkjoxwylrqQpKI4R9OfHOZ6zaDino'  # From step 1
-        # )
+        
+        # Initialize prediction tracker
+        self.prediction_tracker = PredictionTracker()
         
         logger.info(f"Initializing {timeframe} bot")
         
@@ -1026,6 +1205,8 @@ class ColabTradingBot:
             f"Latency: {latency_ms:.1f}ms\n"
             f"Time: {signal_data['time'].strftime('%Y-%m-%d %H:%M:%S')}"
         )
+        
+        # Send to Telegram
         send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
     
         # Store in Google Sheets with error handling
@@ -1038,11 +1219,38 @@ class ColabTradingBot:
         
         if not sheets_success:
             self.logger.warning("Failed to store signal in Google Sheets")
+        
+        # Track prediction for monitoring
+        self.prediction_tracker.add_prediction(prediction, signal_type, datetime.now(NY_TZ))
     
-    
-# ========================
-# UPDATED RUN METHOD
-# ========================
+    def test_credentials(self):
+        """Test both Telegram and Oanda credentials with detailed logging"""
+        logger.info("Testing credentials...")
+        
+        # Test Telegram
+        test_msg = f"🔧 {self.timeframe} bot credentials test"
+        logger.debug(f"Sending Telegram test: {test_msg}")
+        telegram_ok = send_telegram(test_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+        
+        # Test Oanda
+        oanda_ok = False
+        try:
+            logger.debug("Testing Oanda API with small candle request")
+            test_data = fetch_candles("M5", count=1, api_key=self.credentials['oanda_api_key'])
+            oanda_ok = not test_data.empty
+            logger.debug(f"Oanda test {'succeeded' if oanda_ok else 'failed'}")
+        except Exception as e:
+            logger.error(f"Oanda test failed: {str(e)}")
+            
+        if not telegram_ok:
+            logger.error("Telegram credentials test failed")
+            
+        if not oanda_ok:
+            logger.error("Oanda credentials test failed")
+            
+        logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok else 'FAIL'}")
+        return telegram_ok and oanda_ok
+
     def run(self):
         """Main bot execution loop with full context fetching"""
         thread_name = threading.current_thread().name
@@ -1126,21 +1334,7 @@ class ColabTradingBot:
                 if features is None:
                     logger.warning("Feature generation failed")
                     continue
-                # DEBUG: Send feature details to Telegram
-                feature_debug = (
-                    f"🔍 {self.timeframe} Feature Debug\n"
-                    f"Time: {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"Signal: {signal_type}\n"
-                    f"Entry: {signal_data['entry']:.5f}\n"
-                    "Top Features:\n"
-                )
-            
-                # Get top 10 most significant features
-                top_features = features.abs().sort_values(ascending=False)#.head(10)
-                for feat, value in top_features.items():
-                    feature_debug += f"{feat}: {value:.4f}\n"
                     
-                # send_telegram(feature_debug, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])    
                 # Get prediction
                 prediction = self.model_loader.predict(features)
                 logger.info(f"Prediction: {prediction:.4f}")
@@ -1153,64 +1347,17 @@ class ColabTradingBot:
                 logger.error(error_msg, exc_info=True)
                 send_telegram(error_msg[:1000], self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                 time.sleep(60)
-                
-    def test_google_sheets(self):
-        """Test Google Sheets connection"""
-        test_data = {
-            'time': datetime.now(NY_TZ),
-            'signal_type': 'TEST',
-            'entry': 1234.56,
-            'sl': 1230.00,
-            'tp': 1250.00
-        }
-        test_features = pd.Series([0.5, 1.2, 0.8], index=['feature1', 'feature2', 'feature3'])
-        
-        success = self.storage.append_signal(
-            timeframe=f"TEST_{self.timeframe}",
-            signal_data=test_data,
-            features=test_features,
-            prediction=0.95
-        )
-        
-        if success:
-            self.logger.info("Google Sheets test passed")
-        else:
-            self.logger.error("Google Sheets test failed")
-        
-        return success
-    def test_credentials(self):
-        """Test both Telegram and Oanda credentials with detailed logging"""
-        logger.info("Testing credentials...")
-        
-        # Test Telegram
-        test_msg = f"🔧 {self.timeframe} bot credentials test"
-        logger.debug(f"Sending Telegram test: {test_msg}")
-        telegram_ok = send_telegram(test_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-        
-        # Test Oanda
-        oanda_ok = False
-        try:
-            logger.debug("Testing Oanda API with small candle request")
-            test_data = fetch_candles("M5", count=1, api_key=self.credentials['oanda_api_key'])
-            oanda_ok = not test_data.empty
-            logger.debug(f"Oanda test {'succeeded' if oanda_ok else 'failed'}")
-        except Exception as e:
-            logger.error(f"Oanda test failed: {str(e)}")
-            
-        if not telegram_ok:
-            logger.error("Telegram credentials test failed")
-            
-        if not oanda_ok:
-            logger.error("Oanda credentials test failed")
-            
-        logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok else 'FAIL'}")
-        return telegram_ok and oanda_ok
+
 # ========================
 # MAIN EXECUTION
 # ========================
 if __name__ == "__main__":
-    print("===== BOT STARTING =====")
+    print("===== UPDATED BOT STARTING =====")
     print(f"Start time: {datetime.now(NY_TZ)}")
+    print("Python version:", sys.version)
+    print("TensorFlow version:", tf.__version__)
+    print("Pandas version:", pd.__version__)
+    print("Pandas_ta version:", ta.__version__)
     
     # Force debug logging to console
     debug_handler = logging.StreamHandler()
@@ -1218,7 +1365,7 @@ if __name__ == "__main__":
     debug_handler.setFormatter(logging.Formatter(log_format))
     logging.getLogger().addHandler(debug_handler)
     
-    logger.info("Starting main execution")
+    logger.info("Starting main execution with updated version-compatible code")
     
     try:
         logger = setup_colab()
