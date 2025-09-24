@@ -439,17 +439,22 @@ class FeatureEngineer:
             df['rsi_20'] = ta.rsi(df['adj close'], length=20)
             df['rsi'] = ta.rsi(df['close'], length=14)
             
-            bb = ta.bbands(np.log1p(df['adj close']), length=20)
-            df['bb_low'] = bb['BBL_20_2.0']
-            df['bb_mid'] = bb['BBM_20_2.0']
-            df['bb_high'] = bb['BBU_20_2.0']
-            
+            # UPDATED CODE:
+            bb = ta.bbands(df['adj close'], length=20, std=2) # Use price directly, not log1p
+            # Check the actual column names returned by printing bb.columns
+            df['bb_low'] = bb['BBL_20_2.0'] if 'BBL_20_2.0' in bb.columns else bb.iloc[:, 0]
+            df['bb_mid'] = bb['BBM_20_2.0'] if 'BBM_20_2.0' in bb.columns else bb.iloc[:, 1]
+            df['bb_high'] = bb['BBU_20_2.0'] if 'BBU_20_2.0' in bb.columns else bb.iloc[:, 2]
+                        
             atr = ta.atr(df['high'], df['low'], df['close'], length=14)
             df['atr_z'] = (atr - atr.mean()) / atr.std()
             
+            # UPDATED CODE:
             macd = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
-            df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
-            
+            # Find the correct column for the MACD line (usually the first one)
+            macd_line = macd.iloc[:, 0] if isinstance(macd, pd.DataFrame) else macd
+            df['macd_z'] = (macd_line - macd_line.mean()) / macd_line.std()
+
             df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
             df['ma_10'] = df['adj close'].rolling(window=10).mean()
             df['ma_100'] = df['adj close'].rolling(window=100).mean()
