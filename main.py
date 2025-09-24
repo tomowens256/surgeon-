@@ -439,48 +439,16 @@ class FeatureEngineer:
             df['rsi_20'] = ta.rsi(df['adj close'], length=20)
             df['rsi'] = ta.rsi(df['close'], length=14)
             
-            # Updated Bollinger Bands calculation for newer pandas_ta version
-            bb = ta.bbands(df['adj close'], length=20, std=2)
-            # Check what columns are actually returned
-            bb_columns = bb.columns.tolist()
-            logger.debug(f"BB columns: {bb_columns}")
-            
-            # Use available columns with fallbacks
-            if 'BBL_20_2.0' in bb_columns:
-                df['bb_low'] = bb['BBL_20_2.0']
-            elif 'BBL_20_2' in bb_columns:
-                df['bb_low'] = bb['BBL_20_2']
-            else:
-                df['bb_low'] = bb.iloc[:, 0]  # First column as fallback
-                
-            if 'BBM_20_2.0' in bb_columns:
-                df['bb_mid'] = bb['BBM_20_2.0']
-            elif 'BBM_20_2' in bb_columns:
-                df['bb_mid'] = bb['BBM_20_2']
-            else:
-                df['bb_mid'] = bb.iloc[:, 1]  # Second column as fallback
-                
-            if 'BBU_20_2.0' in bb_columns:
-                df['bb_high'] = bb['BBU_20_2.0']
-            elif 'BBU_20_2' in bb_columns:
-                df['bb_high'] = bb['BBU_20_2']
-            else:
-                df['bb_high'] = bb.iloc[:, 2]  # Third column as fallback
+            bb = ta.bbands(np.log1p(df['adj close']), length=20)
+            df['bb_low'] = bb['BBL_20_2.0']
+            df['bb_mid'] = bb['BBM_20_2.0']
+            df['bb_high'] = bb['BBU_20_2.0']
             
             atr = ta.atr(df['high'], df['low'], df['close'], length=14)
             df['atr_z'] = (atr - atr.mean()) / atr.std()
             
-            # Updated MACD calculation for newer pandas_ta version
             macd = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
-            macd_columns = macd.columns.tolist()
-            logger.debug(f"MACD columns: {macd_columns}")
-            
-            if 'MACD_12_26_9' in macd_columns:
-                df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
-            elif 'MACD' in macd_columns:
-                df['macd_z'] = (macd['MACD'] - macd['MACD'].mean()) / macd['MACD'].std()
-            else:
-                df['macd_z'] = (macd.iloc[:, 0] - macd.iloc[:, 0].mean()) / macd.iloc[:, 0].std()
+            df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
             
             df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
             df['ma_10'] = df['adj close'].rolling(window=10).mean()
@@ -498,11 +466,6 @@ class FeatureEngineer:
             return df
         except Exception as e:
             logger.error(f"Error in calculate_technical_indicators: {str(e)}")
-            # Add fallback values for critical columns
-            df['bb_low'] = df['adj close'].rolling(window=20).mean() - 2 * df['adj close'].rolling(window=20).std()
-            df['bb_mid'] = df['adj close'].rolling(window=20).mean()
-            df['bb_high'] = df['adj close'].rolling(window=20).mean() + 2 * df['adj close'].rolling(window=20).std()
-            df['macd_z'] = 0
             return df
 
     def calculate_trade_features(self, df, signal_type, entry):
@@ -730,9 +693,6 @@ class FeatureEngineer:
 
     def generate_features(self, df, signal_type):
         try:
-            logger.debug(f"Generating features for {signal_type} signal")
-            logger.debug(f"DataFrame columns: {df.columns.tolist()}")
-            
             if len(df) < 200:
                 logger.warning("Not enough data for feature generation")
                 return None
