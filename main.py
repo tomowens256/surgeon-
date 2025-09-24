@@ -1363,7 +1363,7 @@ if __name__ == "__main__":
     print("Python version:", sys.version)
     print("TensorFlow version:", tf.__version__)
     print("Pandas version:", pd.__version__)
-    print("Pandas_ta version:", ta.__version__)
+    #print("Pandas_ta version:", ta.__version__)
     
     # Force debug logging to console
     debug_handler = logging.StreamHandler()
