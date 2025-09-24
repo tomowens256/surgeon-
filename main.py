@@ -788,40 +788,40 @@ class FeatureEngineer:
             }
 
     def validate_features(self, features):
-    """Validate generated features with proper type handling"""
-    if features is None:
-        return False
-    
-    try:
-        # Convert to numpy array of floats for numerical operations
-        features_array = features.values.astype(np.float64)
-        
-        # Check for extreme values that could cause scaling issues
-        extreme_mask = (np.abs(features_array) > 1000) | (np.isnan(features_array)) | (np.isinf(features_array))
-        
-        if extreme_mask.any():
-            logger.warning(f"Extreme feature values detected in {np.sum(extreme_mask)} features")
-            # Zero out extreme values in the original features series
-            extreme_indices = np.where(extreme_mask)[0]
-            for idx in extreme_indices:
-                features.iloc[idx] = 0.0
-            
-        # Check if all features are zero (common issue)
-        if np.allclose(features_array, 0):
-            logger.warning("All features are zero!")
+        """Validate generated features with proper type handling"""
+        if features is None:
             return False
-            
-        return True
-    except Exception as e:
-        logger.error(f"Error in feature validation: {str(e)}")
-        # If validation fails, try to clean the features and continue
+        
         try:
-            # Force conversion to float64 and replace problematic values
-            features_clean = features.astype(np.float64).fillna(0).replace([np.inf, -np.inf], 0)
-            features[:] = features_clean.values
+            # Convert to numpy array of floats for numerical operations
+            features_array = features.values.astype(np.float64)
+            
+            # Check for extreme values that could cause scaling issues
+            extreme_mask = (np.abs(features_array) > 1000) | (np.isnan(features_array)) | (np.isinf(features_array))
+            
+            if extreme_mask.any():
+                logger.warning(f"Extreme feature values detected in {np.sum(extreme_mask)} features")
+                # Zero out extreme values in the original features series
+                extreme_indices = np.where(extreme_mask)[0]
+                for idx in extreme_indices:
+                    features.iloc[idx] = 0.0
+                
+            # Check if all features are zero (common issue)
+            if np.allclose(features_array, 0):
+                logger.warning("All features are zero!")
+                return False
+                
             return True
-        except:
-            return False
+        except Exception as e:
+            logger.error(f"Error in feature validation: {str(e)}")
+            # If validation fails, try to clean the features and continue
+            try:
+                # Force conversion to float64 and replace problematic values
+                features_clean = features.astype(np.float64).fillna(0).replace([np.inf, -np.inf], 0)
+                features[:] = features_clean.values
+                return True
+            except:
+                return False
 
     def generate_features(self, df, signal_type):
     """Generate features with proper dtype handling and validation"""
