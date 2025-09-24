@@ -592,16 +592,16 @@ class FeatureEngineer:
         try:
             df = df.copy()
             
-            # Day of week features
+            # Day of week features - ensure float conversion
             df['day'] = df['time'].dt.day_name()
             all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
             for day in all_days:
-                df[f'day_{day}'] = 0
+                df[f'day_{day}'] = 0.0  # Use float instead of int
                 
             # Set current day
             today = datetime.now(NY_TZ).strftime('%A')
             if f'day_{today}' in df.columns:
-                df[f'day_{today}'] = 1
+                df[f'day_{today}'] = 1.0  # Use float instead of int
             
             # Session features
             def get_session(hour):
@@ -621,7 +621,7 @@ class FeatureEngineer:
             expected_session_cols = ['session_q1', 'session_q2', 'session_q3', 'session_q4']
             for col in expected_session_cols:
                 if col not in session_dummies.columns:
-                    session_dummies[col] = 0
+                    session_dummies[col] = 0.0
             
             df = pd.concat([df, session_dummies[expected_session_cols]], axis=1)
             
@@ -643,7 +643,7 @@ class FeatureEngineer:
             expected_rsi_cols = ['rsi_zone_oversold', 'rsi_zone_overbought', 'rsi_zone_neutral', 'rsi_zone_unknown']
             for col in expected_rsi_cols:
                 if col not in rsi_dummies.columns:
-                    rsi_dummies[col] = 0
+                    rsi_dummies[col] = 0.0
             
             df = pd.concat([df, rsi_dummies[expected_rsi_cols]], axis=1)
             
@@ -652,13 +652,13 @@ class FeatureEngineer:
                 try:
                     return int(row['ma_20'] > row['ma_30'] > row['ma_40'] > row['ma_60'])
                 except:
-                    return 0
+                    return 0.0
                     
             def is_bearish_stack(row):
                 try:
                     return int(row['ma_20'] < row['ma_30'] < row['ma_40'] < row['ma_60'])
                 except:
-                    return 0
+                    return 0.0
             
             df['trend_strength_up'] = df.apply(is_bullish_stack, axis=1).astype(float)
             df['trend_strength_down'] = df.apply(is_bearish_stack, axis=1).astype(float)
@@ -682,7 +682,7 @@ class FeatureEngineer:
             expected_trend_cols = ['trend_direction_downtrend', 'trend_direction_sideways', 'trend_direction_uptrend']
             for col in expected_trend_cols:
                 if col not in trend_dummies.columns:
-                    trend_dummies[col] = 0
+                    trend_dummies[col] = 0.0
             
             df = pd.concat([df, trend_dummies[expected_trend_cols]], axis=1)
             
@@ -693,7 +693,7 @@ class FeatureEngineer:
             expected_cols = self.base_features
             for col in expected_cols:
                 if col not in df.columns:
-                    df[col] = 0
+                    df[col] = 0.0
             return df.fillna(0)
 
     def calculate_minutes_closed(self, df):
@@ -788,107 +788,155 @@ class FeatureEngineer:
             }
 
     def validate_features(self, features):
-        """Validate generated features before prediction to prevent overconfidence"""
-        if features is None:
-            return False
-            
+    """Validate generated features with proper type handling"""
+    if features is None:
+        return False
+    
+    try:
+        # Convert to numpy array of floats for numerical operations
+        features_array = features.values.astype(np.float64)
+        
         # Check for extreme values that could cause scaling issues
-        extreme_mask = (np.abs(features) > 1000) | (np.isnan(features)) | (np.isinf(features))
+        extreme_mask = (np.abs(features_array) > 1000) | (np.isnan(features_array)) | (np.isinf(features_array))
+        
         if extreme_mask.any():
-            logger.warning(f"Extreme feature values detected in {sum(extreme_mask)} features")
-            # Zero out extreme values rather than failing completely
-            features[extreme_mask] = 0
+            logger.warning(f"Extreme feature values detected in {np.sum(extreme_mask)} features")
+            # Zero out extreme values in the original features series
+            extreme_indices = np.where(extreme_mask)[0]
+            for idx in extreme_indices:
+                features.iloc[idx] = 0.0
             
         # Check if all features are zero (common issue)
-        if np.allclose(features, 0):
+        if np.allclose(features_array, 0):
             logger.warning("All features are zero!")
             return False
             
         return True
+    except Exception as e:
+        logger.error(f"Error in feature validation: {str(e)}")
+        # If validation fails, try to clean the features and continue
+        try:
+            # Force conversion to float64 and replace problematic values
+            features_clean = features.astype(np.float64).fillna(0).replace([np.inf, -np.inf], 0)
+            features[:] = features_clean.values
+            return True
+        except:
+            return False
 
     def generate_features(self, df, signal_type):
-        """Generate features with comprehensive error handling and validation"""
-        try:
-            if len(df) < 200:
-                logger.warning("Not enough data for feature generation")
-                return None
-            
-            df = df.tail(200).copy()
-            
-            # Set current candle close = open for immediate processing
-            current_candle = df.iloc[-1].copy()
-            current_candle['close'] = current_candle['open']
-            df.iloc[-1] = current_candle
-            
-            # Calculate all technical indicators
-            df = self.calculate_technical_indicators(df)
-            df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
-            df = self.calculate_categorical_features(df)
-            df = self.calculate_minutes_closed(df)
-            
-            # Volume and price-based features
-            df['prev_volume'] = df['volume'].shift(1).fillna(0)
-            df['body_size'] = abs(df['close'] - df['open'])
-            df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
-            df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
-            df['prev_body_size'] = df['body_size'].shift(1).fillna(0)
-            df['prev_wick_up'] = df['wick_up'].shift(1).fillna(0)
-            df['prev_wick_down'] = df['wick_down'].shift(1).fillna(0)
-            
-            # Ratio features with division protection
-            df['price_div_vol'] = np.where(df['garman_klass_vol'] != 0, 
-                                         df['adj close'] / (df['garman_klass_vol'] + 1e-8), 0)
-            df['rsi_div_macd'] = np.where(df['macd_z'] != 0, 
-                                        df['rsi'] / (df['macd_z'] + 1e-8), 0)
-            df['price_div_vwap'] = np.where(df['vwap'] != 0, 
-                                          df['adj close'] / (df['vwap'] + 1e-8), 0)
-            df['sl_div_atr'] = np.where(df['atr_z'] != 0, 
-                                      df['sl_distance'] / (df['atr_z'] + 1e-8), 0)
-            df['tp_div_atr'] = np.where(df['atr_z'] != 0, 
-                                      df['tp_distance'] / (df['atr_z'] + 1e-8), 0)
-            df['rrr_div_rsi'] = np.where(df['rsi'] != 0, 
-                                       df['rrr'] / (df['rsi'] + 1e-8), 0)
-            
-            current_row = df.iloc[-1]
-            combo_flags = self.calculate_combo_flags(current_row, signal_type)
-            
-            # Set flags in dataframe
-            for flag_type in ['dead', 'fair', 'fine']:
-                df[f'combo_flag_{flag_type}'] = 1 if combo_flags['combo_flag'] == flag_type else 0
-                df[f'combo_flag2_{flag_type}'] = 1 if combo_flags['combo_flag2'] == flag_type else 0
-                
-            df['is_bad_combo'] = combo_flags['is_bad_combo']
-            
-            df['crt_BUY'] = int(signal_type == 'BUY')
-            df['crt_SELL'] = int(signal_type == 'SELL')
-            df['trade_type_BUY'] = int(signal_type == 'BUY')
-            df['trade_type_SELL'] = int(signal_type == 'SELL')
-            
-            features = pd.Series(index=self.features, dtype=float)
-            for feat in self.features:
-                if feat in df.columns:
-                    features[feat] = df[feat].iloc[-1]
-                else:
-                    features[feat] = 0
-            
-            # Use shifted features for stability
-            if len(df) >= 2:
-                prev_candle = df.iloc[-2]
-                for feat in self.shift_features:
-                    if feat in features.index and feat in prev_candle:
-                        features[feat] = prev_candle[feat]
-            
-            # Final validation and cleaning
-            features = features.fillna(0)
-            if not self.validate_features(features):
-                logger.warning("Feature validation failed")
-                return None
-            
-            return features
-        except Exception as e:
-            logger.error(f"Error in generate_features: {str(e)}")
-            logger.error(traceback.format_exc())
+    """Generate features with proper dtype handling and validation"""
+    try:
+        if len(df) < 200:
+            logger.warning("Not enough data for feature generation")
             return None
+        
+        df = df.tail(200).copy()
+        
+        # Set current candle close = open for immediate processing
+        current_candle = df.iloc[-1].copy()
+        current_candle['close'] = current_candle['open']
+        df.iloc[-1] = current_candle
+        
+        # Calculate all technical indicators
+        df = self.calculate_technical_indicators(df)
+        df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
+        df = self.calculate_categorical_features(df)
+        df = self.calculate_minutes_closed(df)
+        
+        # Volume and price-based features
+        df['prev_volume'] = df['volume'].shift(1).fillna(0)
+        df['body_size'] = abs(df['close'] - df['open'])
+        df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
+        df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
+        df['prev_body_size'] = df['body_size'].shift(1).fillna(0)
+        df['prev_wick_up'] = df['wick_up'].shift(1).fillna(0)
+        df['prev_wick_down'] = df['wick_down'].shift(1).fillna(0)
+        
+        # Ratio features with division protection
+        df['price_div_vol'] = np.where(df['garman_klass_vol'] != 0, 
+                                     df['adj close'] / (df['garman_klass_vol'] + 1e-8), 0)
+        df['rsi_div_macd'] = np.where(df['macd_z'] != 0, 
+                                    df['rsi'] / (df['macd_z'] + 1e-8), 0)
+        df['price_div_vwap'] = np.where(df['vwap'] != 0, 
+                                      df['adj close'] / (df['vwap'] + 1e-8), 0)
+        df['sl_div_atr'] = np.where(df['atr_z'] != 0, 
+                                  df['sl_distance'] / (df['atr_z'] + 1e-8), 0)
+        df['tp_div_atr'] = np.where(df['atr_z'] != 0, 
+                                  df['tp_distance'] / (df['atr_z'] + 1e-8), 0)
+        df['rrr_div_rsi'] = np.where(df['rsi'] != 0, 
+                                   df['rrr'] / (df['rsi'] + 1e-8), 0)
+        
+        current_row = df.iloc[-1]
+        combo_flags = self.calculate_combo_flags(current_row, signal_type)
+        
+        # Set flags in dataframe - ensure float conversion
+        for flag_type in ['dead', 'fair', 'fine']:
+            flag_value = 1.0 if combo_flags['combo_flag'] == flag_type else 0.0
+            df[f'combo_flag_{flag_type}'] = flag_value
+            flag2_value = 1.0 if combo_flags['combo_flag2'] == flag_type else 0.0
+            df[f'combo_flag2_{flag_type}'] = flag2_value
+            
+        df['is_bad_combo'] = float(combo_flags['is_bad_combo'])
+        
+        df['crt_BUY'] = float(signal_type == 'BUY')
+        df['crt_SELL'] = float(signal_type == 'SELL')
+        df['trade_type_BUY'] = float(signal_type == 'BUY')
+        df['trade_type_SELL'] = float(signal_type == 'SELL')
+        
+        # Initialize features Series with proper dtype
+        features = pd.Series(index=self.features, dtype=np.float64)
+        
+        # Fill features with proper type conversion
+        for feat in self.features:
+            if feat in df.columns:
+                value = df[feat].iloc[-1]
+                # Convert to float, handling different types
+                if isinstance(value, (bool, np.bool_)):
+                    features[feat] = float(value)
+                elif isinstance(value, (int, np.integer)):
+                    features[feat] = float(value)
+                elif isinstance(value, (float, np.floating)):
+                    features[feat] = value
+                elif pd.isna(value):
+                    features[feat] = 0.0
+                else:
+                    # Try to convert any other type
+                    try:
+                        features[feat] = float(value)
+                    except (ValueError, TypeError):
+                        features[feat] = 0.0
+            else:
+                features[feat] = 0.0
+        
+        # Use shifted features for stability with proper type conversion
+        if len(df) >= 2:
+            prev_candle = df.iloc[-2]
+            for feat in self.shift_features:
+                if feat in features.index and feat in prev_candle:
+                    value = prev_candle[feat]
+                    if isinstance(value, (bool, np.bool_)):
+                        features[feat] = float(value)
+                    elif isinstance(value, (int, np.integer, float, np.floating)):
+                        features[feat] = float(value)
+                    else:
+                        try:
+                            features[feat] = float(value)
+                        except (ValueError, TypeError):
+                            features[feat] = 0.0
+        
+        # Ensure all values are float64
+        features = features.astype(np.float64)
+        
+        # Final validation and cleaning
+        if not self.validate_features(features):
+            logger.warning("Feature validation failed")
+            return None
+        
+        return features
+    except Exception as e:
+        logger.error(f"Error in generate_features: {str(e)}")
+        logger.error(traceback.format_exc())
+        return None
 
 # ========================
 # ENHANCED MODEL LOADER WITH OVERCONFIDENCE DETECTION
