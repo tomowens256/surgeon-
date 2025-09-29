@@ -1162,6 +1162,7 @@ class FeatureEngineer:
 
 
             features = pd.Series(index=self.features, dtype=float)
+            logger.error(print(features)#for debug bro
 
             for feat in self.features:
 
@@ -1194,6 +1195,7 @@ class FeatureEngineer:
                 for col in features[features.isna()].index:
 
                     features[col] = 0
+            logger.error(print(df.filter(like="BB").columns))
 
 
 
