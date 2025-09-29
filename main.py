@@ -352,591 +352,680 @@ def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
 # UPDATED FEATURE ENGINEER FOR CURRENT VERSIONS
 # ========================
 class FeatureEngineer:
+
     def __init__(self, timeframe):
+
         self.timeframe = timeframe
+
         logger.debug(f"Initializing FeatureEngineer for {timeframe}")
-        
+
         # Base features in exact order
+
         self.base_features = [
+
             'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
+
             'atr_z', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
+
             'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60', 'trend_strength_up',
+
             'trend_strength_down', 'sl_price', 'tp_price', 'prev_volume', 'sl_distance',
+
             'tp_distance', 'rrr', 'log_sl', 'prev_body_size', 'prev_wick_up',
+
             'prev_wick_down', 'is_bad_combo', 'price_div_vol', 'rsi_div_macd',
+
             'price_div_vwap', 'sl_div_atr', 'tp_div_atr', 'rrr_div_rsi',
+
             'day_Friday', 'day_Monday', 'day_Sunday', 'day_Thursday', 'day_Tuesday',
+
             'day_Wednesday', 'session_q1', 'session_q2', 'session_q3', 'session_q4',
+
             'rsi_zone_neutral', 'rsi_zone_overbought', 'rsi_zone_oversold',
+
             'rsi_zone_unknown', 'trend_direction_downtrend', 'trend_direction_sideways',
+
             'trend_direction_uptrend', 'crt_BUY', 'crt_SELL', 'trade_type_BUY',
+
             'trade_type_SELL', 'combo_flag_dead', 'combo_flag_fair', 'combo_flag_fine',
+
             'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
+
         ]
+
         self.rsi_bins = [0, 20, 30, 40, 50, 60, 70, 80, 100]
+
         self.macd_z_bins = [-12.386, -0.496, -0.138, 0.134, 0.527, 9.246]
-        
+
         # Timeframe-specific minute closed features at END
+
         if timeframe == "M5":
+
             self.features = self.base_features + [
+
                 'minutes,closed_0', 'minutes,closed_5', 'minutes,closed_10', 
+
                 'minutes,closed_15', 'minutes,closed_20', 'minutes,closed_25', 
+
                 'minutes,closed_30', 'minutes,closed_35', 'minutes,closed_40', 
+
                 'minutes,closed_45', 'minutes,closed_50', 'minutes,closed_55'
+
             ]
+
         else:  # M15 timeframe
+
             self.features = self.base_features + [
+
                 'minutes,closed_0', 'minutes,closed_15', 
+
                 'minutes,closed_30', 'minutes,closed_45'
+
             ]
-        
+
+
+
         # Features to shift (volume estimation replaced by shifted features)
+
         self.shift_features = [
+
             'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
+
             'atr_z', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100',
+
             'vwap', 'vwap_std', 'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60',
+
             'trend_strength_up', 'trend_strength_down', 'volume', 'body_size', 
+
             'wick_up', 'wick_down', 'prev_body_size', 'prev_wick_up', 'prev_wick_down', 
+
             'is_bad_combo', 'price_div_vol', 'rsi_div_macd', 'price_div_vwap', 
+
             'sl_div_atr', 'rrr_div_rsi', 'rsi_zone_neutral', 'rsi_zone_overbought', 
+
             'rsi_zone_oversold', 'rsi_zone_unknown', 'combo_flag_dead', 'combo_flag_fair',
+
             'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
+
         ]
-        
+
+
+
     def calculate_crt_signal(self, df):
+
         """Calculate CRT signal at OPEN of current candle (c0) with minimal latency"""
-        try:
-            if len(df) < 3:
-                return None, None
-                
-            # Use the last COMPLETED candle as c2 (index -2)
-            # c1 = candle at -3, c2 = candle at -2, c0 = current open at -1
-            c1 = df.iloc[-3]
-            c2 = df.iloc[-2]
-            current_open = df.iloc[-1]['open']  # Only need open of current candle
-            
-            # Calculate c2 metrics
-            c2_range = c2['high'] - c2['low']
-            c2_mid = c2['low'] + (0.5 * c2_range)
-            
-            # CRT conditions - using ONLY completed candles and current open
-            if (c2['low'] < c1['low'] and 
-                c2['close'] > c1['low'] and 
-                current_open > c2_mid):
-                signal_type = 'BUY'
-                entry = current_open
-                sl = c2['low']
-                risk = abs(entry - sl)
-                tp = entry + 4 * risk
-                return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
-            
-            elif (c2['high'] > c1['high'] and 
-                  c2['close'] < c1['high'] and 
-                  current_open < c2_mid):
-                signal_type = 'SELL'
-                entry = current_open
-                sl = c2['high']
-                risk = abs(sl - entry)
-                tp = entry - 4 * risk
-                return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
-            
+
+        if len(df) < 3:
+
             return None, None
-        except Exception as e:
-            logger.error(f"Error in calculate_crt_signal: {str(e)}")
-            return None, None
-        
+
+
+
+        # Use the last COMPLETED candle as c2 (index -2)
+
+        # c1 = candle at -3, c2 = candle at -2, c0 = current open at -1
+
+        c1 = df.iloc[-3]
+
+        c2 = df.iloc[-2]
+
+        current_open = df.iloc[-1]['open']  # Only need open of current candle
+
+
+
+        # Calculate c2 metrics
+
+        c2_range = c2['high'] - c2['low']
+
+        c2_mid = c2['low'] + (0.5 * c2_range)
+
+
+
+        # CRT conditions - using ONLY completed candles and current open
+
+        if (c2['low'] < c1['low'] and 
+
+            c2['close'] > c1['low'] and 
+
+            current_open > c2_mid):
+
+            signal_type = 'BUY'
+
+            entry = current_open
+
+            sl = c2['low']
+
+            risk = abs(entry - sl)
+
+            tp = entry + 4 * risk
+
+            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
+
+
+
+        elif (c2['high'] > c1['high'] and 
+
+              c2['close'] < c1['high'] and 
+
+              current_open < c2_mid):
+
+            signal_type = 'SELL'
+
+            entry = current_open
+
+            sl = c2['high']
+
+            risk = abs(sl - entry)
+
+            tp = entry - 4 * risk
+
+            return signal_type, {'entry': entry, 'sl': sl, 'tp': tp, 'time': df.iloc[-1]['time']}
+
+
+
+        return None, None
+
+
+
     def calculate_technical_indicators(self, df):
-        """Calculate technical indicators with modern pandas_ta compatibility"""
-        try:
-            df = df.copy().drop_duplicates(subset=['time'], keep='last')
-            
-            # Use current open as adjusted close
-            df['adj close'] = df['open']
-            
-            # Garman-Klass volatility - UPDATED for current numpy
-            high_log = np.log(df['high'].astype(float) + 1e-8)
-            low_log = np.log(df['low'].astype(float) + 1e-8)
-            close_log = np.log(df['adj close'].astype(float) + 1e-8)
-            open_log = np.log(df['open'].astype(float) + 1e-8)
-            
-            df['garman_klass_vol'] = (((high_log - low_log) ** 2) / 2 - 
-                                    (2 * np.log(2) - 1) * ((close_log - open_log) ** 2))
-            
-            # RSI calculations - UPDATED for current pandas_ta
-            rsi_20_result = ta.rsi(df['adj close'], length=20)
-            rsi_14_result = ta.rsi(df['close'], length=14)
-            
-            # Handle different return types from pandas_ta
-            if isinstance(rsi_20_result, pd.Series):
-                df['rsi_20'] = rsi_20_result
-            else:
-                df['rsi_20'] = rsi_20_result.iloc[:, 0] if hasattr(rsi_20_result, 'iloc') else rsi_20_result
-                
-            if isinstance(rsi_14_result, pd.Series):
-                df['rsi'] = rsi_14_result
-            else:
-                df['rsi'] = rsi_14_result.iloc[:, 0] if hasattr(rsi_14_result, 'iloc') else rsi_14_result
-            
-            # Bollinger Bands - UPDATED for current pandas_ta column naming
-            bb = ta.bbands(df['adj close'], length=20, std=2)
-            
-            # Handle different Bollinger Bands return formats
-            if isinstance(bb, pd.DataFrame):
-                # Try multiple possible column naming patterns
-                if 'BBL_20_2.0' in bb.columns:
-                    df['bb_low'] = bb['BBL_20_2.0']
-                    df['bb_mid'] = bb['BBM_20_2.0']
-                    df['bb_high'] = bb['BBU_20_2.0']
-                elif 'BBL_20_2' in bb.columns:
-                    df['bb_low'] = bb['BBL_20_2']
-                    df['bb_mid'] = bb['BBM_20_2']
-                    df['bb_high'] = bb['BBU_20_2']
-                elif len(bb.columns) >= 3:
-                    # Fallback to positional access
-                    df['bb_low'] = bb.iloc[:, 0]
-                    df['bb_mid'] = bb.iloc[:, 1]
-                    df['bb_high'] = bb.iloc[:, 2]
-                else:
-                    df['bb_low'] = df['bb_mid'] = df['bb_high'] = 0
-            else:
-                df['bb_low'] = df['bb_mid'] = df['bb_high'] = 0
-            
-            # ATR with z-score - UPDATED for stability
-            atr_result = ta.atr(df['high'], df['low'], df['close'], length=14)
-            if atr_result is not None:
-                atr_mean = atr_result.mean()
-                atr_std = atr_result.std()
-                df['atr_z'] = (atr_result - atr_mean) / (atr_std + 1e-8) if atr_std > 0 else 0
-            else:
-                df['atr_z'] = 0
-            
-            # MACD with z-score - UPDATED for current pandas_ta
-            macd_result = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
-            if macd_result is not None and isinstance(macd_result, pd.DataFrame):
-                # Find MACD line column (not histogram or signal)
-                macd_col = None
-                for col in macd_result.columns:
-                    if 'MACD_' in col and 'MACDh_' not in col and 'MACDs_' not in col:
-                        macd_col = macd_result[col]
-                        break
-                
-                if macd_col is None and len(macd_result.columns) > 0:
-                    macd_col = macd_result.iloc[:, 0]
-                
-                if macd_col is not None:
-                    macd_mean = macd_col.mean()
-                    macd_std = macd_col.std()
-                    df['macd_z'] = (macd_col - macd_mean) / (macd_std + 1e-8) if macd_std > 0 else 0
-                else:
-                    df['macd_z'] = 0
-            else:
-                df['macd_z'] = 0
-            
-            # Moving averages and other indicators - UPDATED with min_periods
-            df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
-            df['ma_10'] = df['adj close'].rolling(window=10, min_periods=1).mean()
-            df['ma_100'] = df['adj close'].rolling(window=100, min_periods=1).mean()
-            df['ma_20'] = df['close'].rolling(window=20, min_periods=1).mean()
-            df['ma_30'] = df['close'].rolling(window=30, min_periods=1).mean()
-            df['ma_40'] = df['close'].rolling(window=40, min_periods=1).mean()
-            df['ma_60'] = df['close'].rolling(window=60, min_periods=1).mean()
-            
-            # VWAP calculation - UPDATED with division protection
-            typical_price = (df['high'] + df['low'] + df['close']) / 3
-            vwap_num = (df['volume'] * typical_price).cumsum()
-            vwap_den = df['volume'].cumsum()
-            df['vwap'] = vwap_num / (vwap_den + 1e-8)
-            df['vwap_std'] = df['vwap'].rolling(window=20, min_periods=1).std()
-            
-            return df.fillna(0)
-        except Exception as e:
-            logger.error(f"Error in calculate_technical_indicators: {str(e)}")
-            logger.error(traceback.format_exc())
-            # Return basic dataframe to prevent complete failure
-            basic_cols = ['open', 'high', 'low', 'close', 'volume', 'time', 'adj close']
-            for col in basic_cols:
-                if col not in df.columns:
-                    df[col] = 0
-            return df.fillna(0)
+
+        """Calculate technical indicators WITHOUT volume imputation"""
+
+        df = df.copy().drop_duplicates(subset=['time'], keep='last')
+
+
+
+        # REMOVED VOLUME ESTIMATION - Using shifted features instead
+
+        df['adj close'] = df['open']
+
+        df['garman_klass_vol'] = (((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -(2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2))
+
+        df['rsi_20'] = ta.rsi(df['adj close'], length=20)
+
+        df['rsi'] = ta.rsi(df['close'], length=14)
+
+
+
+        bb = ta.bbands(np.log1p(df['adj close']), length=20)
+
+        df['bb_low'] = bb['BBL_20_2.0']
+
+        df['bb_mid'] = bb['BBM_20_2.0']
+
+        df['bb_high'] = bb['BBU_20_2.0']
+
+
+
+        atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+
+        df['atr_z'] = (atr - atr.mean()) / atr.std()
+
+
+
+        macd = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
+
+        df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
+
+
+
+        df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
+
+        df['ma_10'] = df['adj close'].rolling(window=10).mean()
+
+        df['ma_100'] = df['adj close'].rolling(window=100).mean()
+
+        df['ma_20'] = df['close'].rolling(window=20).mean()
+
+        df['ma_30'] = df['close'].rolling(window=30).mean()
+
+        df['ma_40'] = df['close'].rolling(window=40).mean()
+
+        df['ma_60'] = df['close'].rolling(window=60).mean()
+
+
+
+        vwap_num = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum()
+
+        vwap_den = df['volume'].cumsum()
+
+        df['vwap'] = vwap_num / vwap_den
+
+        df['vwap_std'] = df['vwap'].rolling(window=20).std()
+
+
+
+        return df
+
+
 
     def calculate_trade_features(self, df, signal_type, entry):
-        """Calculate trade-specific features with robust error handling"""
-        try:
-            df = df.copy()
-            if len(df) < 2:
-                prev_row = df.iloc[-1]
-            else:
-                prev_row = df.iloc[-2]
-            
-            if signal_type == 'SELL':
-                df['sl_price'] = prev_row['high']
-                risk = abs(entry - df['sl_price'].iloc[-1])
-                df['tp_price'] = entry - 4 * risk
-            else:  # BUY
-                df['sl_price'] = prev_row['low']
-                risk = abs(entry - df['sl_price'].iloc[-1])
-                df['tp_price'] = entry + 4 * risk
-                
-            df['sl_distance'] = abs(entry - df['sl_price']) * 10
-            df['tp_distance'] = abs(df['tp_price'] - entry) * 10
-            df['rrr'] = np.where(df['sl_distance'] > 0, df['tp_distance'] / df['sl_distance'], 1)
-            df['log_sl'] = np.log1p(np.abs(df['sl_price']))
-            
-            return df.fillna(0)
-        except Exception as e:
-            logger.error(f"Error in calculate_trade_features: {str(e)}")
-            return df.fillna(0)
+
+        df = df.copy()
+
+        prev_row = df.iloc[-2] if len(df) > 1 else df.iloc[-1]
+
+
+
+        if signal_type == 'SELL':
+
+            df['sl_price'] = prev_row['high']
+
+            risk = abs(entry - df['sl_price'].iloc[-1])
+
+            df['tp_price'] = entry - 4 * risk
+
+        else:  # BUY
+
+            df['sl_price'] = prev_row['low']
+
+            risk = abs(entry - df['sl_price'].iloc[-1])
+
+            df['tp_price'] = entry + 4 * risk
+
+
+
+        df['sl_distance'] = abs(entry - df['sl_price']) * 10
+
+        df['tp_distance'] = abs(df['tp_price'] - entry) * 10
+
+        df['rrr'] = df['tp_distance'] / df['sl_distance'].replace(0, np.nan)
+
+        df['log_sl'] = np.log1p(df['sl_price'])
+
+
+
+        return df
+
+
 
     def calculate_categorical_features(self, df):
-        """Calculate categorical features with modern pandas compatibility"""
-        try:
-            df = df.copy()
-            
-            # Day of week features - ensure float conversion
-            df['day'] = df['time'].dt.day_name()
-            all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-            for day in all_days:
-                df[f'day_{day}'] = 0.0  # Use float instead of int
-                
-            # Set current day
-            today = datetime.now(NY_TZ).strftime('%A')
-            if f'day_{today}' in df.columns:
-                df[f'day_{today}'] = 1.0  # Use float instead of int
-            
-            # Session features
-            def get_session(hour):
-                if 0 <= hour < 6:
-                    return 'q2'
-                elif 6 <= hour < 12:
-                    return 'q3'
-                elif 12 <= hour < 18:
-                    return 'q4'
-                else:
-                    return 'q1'
-                    
-            df['session'] = df['time'].dt.hour.apply(get_session)
-            session_dummies = pd.get_dummies(df['session'], prefix='session')
-            
-            # Ensure all session columns exist
-            expected_session_cols = ['session_q1', 'session_q2', 'session_q3', 'session_q4']
-            for col in expected_session_cols:
-                if col not in session_dummies.columns:
-                    session_dummies[col] = 0.0
-            
-            df = pd.concat([df, session_dummies[expected_session_cols]], axis=1)
-            
-            # RSI zone features
-            def rsi_zone(rsi):
-                if pd.isna(rsi) or rsi == 0:
-                    return 'unknown'
-                elif rsi < 30:
-                    return 'oversold'
-                elif rsi > 70:
-                    return 'overbought'
-                else:
-                    return 'neutral'
-                    
-            df['rsi_zone'] = df['rsi'].apply(rsi_zone)
-            rsi_dummies = pd.get_dummies(df['rsi_zone'], prefix='rsi_zone')
-            
-            # Ensure all RSI zone columns exist
-            expected_rsi_cols = ['rsi_zone_oversold', 'rsi_zone_overbought', 'rsi_zone_neutral', 'rsi_zone_unknown']
-            for col in expected_rsi_cols:
-                if col not in rsi_dummies.columns:
-                    rsi_dummies[col] = 0.0
-            
-            df = pd.concat([df, rsi_dummies[expected_rsi_cols]], axis=1)
-            
-            # Trend strength features
-            def is_bullish_stack(row):
-                try:
-                    return int(row['ma_20'] > row['ma_30'] > row['ma_40'] > row['ma_60'])
-                except:
-                    return 0.0
-                    
-            def is_bearish_stack(row):
-                try:
-                    return int(row['ma_20'] < row['ma_30'] < row['ma_40'] < row['ma_60'])
-                except:
-                    return 0.0
-            
-            df['trend_strength_up'] = df.apply(is_bullish_stack, axis=1).astype(float)
-            df['trend_strength_down'] = df.apply(is_bearish_stack, axis=1).astype(float)
-            
-            # Trend direction features
-            def get_trend(row):
-                try:
-                    if row['trend_strength_up'] > row['trend_strength_down']:
-                        return 'uptrend'
-                    elif row['trend_strength_down'] > row['trend_strength_up']:
-                        return 'downtrend'
-                    else:
-                        return 'sideways'
-                except:
-                    return 'sideways'
-            
-            df['trend_direction'] = df.apply(get_trend, axis=1)
-            trend_dummies = pd.get_dummies(df['trend_direction'], prefix='trend_direction')
-            
-            # Ensure all trend direction columns exist
-            expected_trend_cols = ['trend_direction_downtrend', 'trend_direction_sideways', 'trend_direction_uptrend']
-            for col in expected_trend_cols:
-                if col not in trend_dummies.columns:
-                    trend_dummies[col] = 0.0
-            
-            df = pd.concat([df, trend_dummies[expected_trend_cols]], axis=1)
-            
-            return df.fillna(0)
-        except Exception as e:
-            logger.error(f"Error in calculate_categorical_features: {str(e)}")
-            # Return dataframe with expected columns
-            expected_cols = self.base_features
-            for col in expected_cols:
-                if col not in df.columns:
-                    df[col] = 0.0
-            return df.fillna(0)
+
+        df = df.copy()
+
+
+
+        df['day'] = df['time'].dt.day_name()
+
+        all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Sunday']
+
+        for day in all_days:
+
+            df[f'day_{day}'] = 0
+
+        today = datetime.now(NY_TZ).strftime('%A')
+
+        df[f'day_{today}'] = 1
+
+
+
+        def get_session(hour):
+
+            if 0 <= hour < 6:
+
+                return 'q2'
+
+            elif 6 <= hour < 12:
+
+                return 'q3'
+
+            elif 12 <= hour < 18:
+
+                return 'q4'
+
+            else:
+
+                return 'q1'
+
+        df['session'] = df['time'].dt.hour.apply(get_session)
+
+        df = pd.get_dummies(df, columns=['session'], prefix='session', drop_first=False)
+
+
+
+        def rsi_zone(rsi):
+
+            if pd.isna(rsi):
+
+                return 'unknown'
+
+            elif rsi < 30:
+
+                return 'oversold'
+
+            elif rsi > 70:
+
+                return 'overbought'
+
+            else:
+
+                return 'neutral'
+
+        df['rsi_zone'] = df['rsi'].apply(rsi_zone)
+
+        df = pd.get_dummies(df, columns=['rsi_zone'], prefix='rsi_zone', drop_first=False)
+
+
+
+        def is_bullish_stack(row):
+
+            return int(row['ma_20'] > row['ma_30'] > row['ma_40'] > row['ma_60'])
+
+        def is_bearish_stack(row):
+
+            return int(row['ma_20'] < row['ma_30'] < row['ma_40'] < row['ma_60'])
+
+
+
+        df['trend_strength_up'] = df.apply(is_bullish_stack, axis=1).astype(float)
+
+        df['trend_strength_down'] = df.apply(is_bearish_stack, axis=1).astype(float)
+
+
+
+        def get_trend(row):
+
+            if row['trend_strength_up'] > row['trend_strength_down']:
+
+                return 'uptrend'
+
+            elif row['trend_strength_down'] > row['trend_strength_up']:
+
+                return 'downtrend'
+
+            else:
+
+                return 'sideways'
+
+        df['trend_direction'] = df.apply(get_trend, axis=1)
+
+        df = pd.get_dummies(df, columns=['trend_direction'], prefix='trend_direction', drop_first=False)
+
+
+
+        return df
+
+
 
     def calculate_minutes_closed(self, df):
+
         """Calculate minutes closed based on actual candle timestamp"""
-        try:
-            df = df.copy()
-            
-            if self.timeframe == "M5":
-                minute_buckets = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
-                minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
-            else:  # M15 timeframe
-                minute_buckets = [0, 15, 30, 45]
-                minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
-                
-            # Initialize all columns to 0
-            for col in minute_cols:
-                df[col] = 0
-            
-            # Get the current candle's minute
-            current_minute = df.iloc[-1]['time'].minute
-            
-            # Calculate bucket based on actual minute of the hour
-            if self.timeframe == "M5":
-                bucket = (current_minute // 5) * 5
-            else:
-                bucket = (current_minute // 15) * 15
-                
-            bucket_col = f'minutes,closed_{bucket}'
-            if bucket_col in df.columns:
-                df[bucket_col] = 1
-                
-            return df
-        except Exception as e:
-            logger.error(f"Error in calculate_minutes_closed: {str(e)}")
-            return df
+
+        df = df.copy()
+
+
+
+        if self.timeframe == "M5":
+
+            minute_buckets = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+
+            minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
+
+        else:  # M15 timeframe
+
+            minute_buckets = [0, 15, 30, 45]
+
+            minute_cols = [f'minutes,closed_{bucket}' for bucket in minute_buckets]
+
+
+
+        # Initialize all columns to 0
+
+        for col in minute_cols:
+
+            df[col] = 0
+
+
+
+        # Get the current candle's minute
+
+        current_minute = df.iloc[-1]['time'].minute
+
+
+
+        # Calculate bucket based on actual minute of the hour
+
+        if self.timeframe == "M5":
+
+            bucket = (current_minute // 5) * 5
+
+        else:
+
+            bucket = (current_minute // 15) * 15
+
+
+
+        bucket_col = f'minutes,closed_{bucket}'
+
+        if bucket_col in df.columns:
+
+            df[bucket_col] = 1
+
+
+
+        return df
+
+
+
+
 
     def calculate_combo_flags(self, row, signal_type):
-        """Calculate combo flags using preloaded dictionaries"""
-        try:
-            # 1. Determine trend direction with fallbacks
-            trend_str = 'sideways'  # Default
-            
-            # Use get() method to avoid KeyError
-            downtrend_val = row.get('trend_direction_downtrend', 0)
-            sideways_val = row.get('trend_direction_sideways', 0)
-            uptrend_val = row.get('trend_direction_uptrend', 0)
-            
-            if downtrend_val == 1:
-                trend_str = 'downtrend'
-            elif uptrend_val == 1:
-                trend_str = 'uptrend'
-            elif sideways_val == 1:
-                trend_str = 'sideways'
-            
-            # 2. Bin RSI value
-            rsi_val = row.get('rsi', 50)  # Default to 50 if missing
-            rsi_bin = None
-            for i in range(len(self.rsi_bins)-1):
-                if self.rsi_bins[i] <= rsi_val < self.rsi_bins[i+1]:
-                    rsi_bin = f"({self.rsi_bins[i]}, {self.rsi_bins[i+1]}]"
-                    break
-            
-            # 3. Bin MACD_Z value
-            macd_z_val = row.get('macd_z', 0)  # Default to 0 if missing
-            macd_z_bin = None
-            for i in range(len(self.macd_z_bins)-1):
-                if self.macd_z_bins[i] <= macd_z_val < self.macd_z_bins[i+1]:
-                    macd_z_bin = f"({self.macd_z_bins[i]}, {self.macd_z_bins[i+1]}]"
-                    break
-            
-            # 4. Create combo keys
-            combo_key = f"{signal_type}_{trend_str}_{rsi_bin}" if rsi_bin else f"{signal_type}_{trend_str}_nan"
-            combo_key2 = f"{signal_type}_{rsi_bin}_{macd_z_bin}" if rsi_bin and macd_z_bin else f"{signal_type}_{rsi_bin}_nan"
-            
-            # 5. Get flags from preloaded dictionaries
-            flag1 = COMBO_FLAGS.get(combo_key, 'dead')
-            flag2 = COMBO_FLAGS2.get(combo_key2, 'dead')
-            
-            # 6. Create flags dictionary
-            return {
-                'combo_flag': flag1,
-                'combo_flag2': flag2,
-                'is_bad_combo': 1 if flag1 == 'dead' else 0
-            }
-        except Exception as e:
-            logger.error(f"Error in calculate_combo_flags: {str(e)}")
-            # Return default values on error
-            return {
-                'combo_flag': 'dead',
-                'combo_flag2': 'dead',
-                'is_bad_combo': 1
-            }
 
-    def validate_features(self, features):
-        """Validate generated features with proper type handling"""
-        if features is None:
-            return False
-        
-        try:
-            # Convert to numpy array of floats for numerical operations
-            features_array = features.values.astype(np.float64)
-            
-            # Check for extreme values that could cause scaling issues
-            extreme_mask = (np.abs(features_array) > 1000) | (np.isnan(features_array)) | (np.isinf(features_array))
-            
-            if extreme_mask.any():
-                logger.warning(f"Extreme feature values detected in {np.sum(extreme_mask)} features")
-                # Zero out extreme values in the original features series
-                extreme_indices = np.where(extreme_mask)[0]
-                for idx in extreme_indices:
-                    features.iloc[idx] = 0.0
-                
-            # Check if all features are zero (common issue)
-            if np.allclose(features_array, 0):
-                logger.warning("All features are zero!")
-                return False
-                
-            return True
-        except Exception as e:
-            logger.error(f"Error in feature validation: {str(e)}")
-            # If validation fails, try to clean the features and continue
-            try:
-                # Force conversion to float64 and replace problematic values
-                features_clean = features.astype(np.float64).fillna(0).replace([np.inf, -np.inf], 0)
-                features[:] = features_clean.values
-                return True
-            except:
-                return False
+        """Calculate combo flags using preloaded dictionaries"""
+
+        # 1. Determine trend direction
+
+        trend_str = None
+
+        if row['trend_direction_downtrend'] == 1:
+
+            trend_str = 'downtrend'
+
+        elif row['trend_direction_sideways'] == 1:
+
+            trend_str = 'sideways'
+
+        elif row['trend_direction_uptrend'] == 1:
+
+            trend_str = 'uptrend'
+
+        else:
+
+            trend_str = 'sideways'  # Default
+
+
+
+        # 2. Bin RSI value
+
+        rsi_val = row['rsi']
+
+        rsi_bin = None
+
+        for i in range(len(self.rsi_bins)-1):
+
+            if self.rsi_bins[i] <= rsi_val < self.rsi_bins[i+1]:
+
+                rsi_bin = f"({self.rsi_bins[i]}, {self.rsi_bins[i+1]}]"
+
+                break
+
+
+
+        # 3. Bin MACD_Z value
+
+        macd_z_val = row['macd_z']
+
+        macd_z_bin = None
+
+        for i in range(len(self.macd_z_bins)-1):
+
+            if self.macd_z_bins[i] <= macd_z_val < self.macd_z_bins[i+1]:
+
+                macd_z_bin = f"({self.macd_z_bins[i]}, {self.macd_z_bins[i+1]}]"
+
+                break
+
+
+
+        # 4. Create combo keys
+
+        combo_key = f"{signal_type}_{trend_str}_{rsi_bin}" if rsi_bin else f"{signal_type}_{trend_str}_nan"
+
+        combo_key2 = f"{signal_type}_{rsi_bin}_{macd_z_bin}" if rsi_bin and macd_z_bin else f"{signal_type}_{rsi_bin}_nan"
+
+
+
+        # 5. Get flags from preloaded dictionaries
+
+        flag1 = COMBO_FLAGS.get(combo_key, 'dead')
+
+        flag2 = COMBO_FLAGS2.get(combo_key2, 'dead')
+
+
+
+        # 6. Create flags dictionary
+
+        return {
+
+            'combo_flag': flag1,
+
+            'combo_flag2': flag2,
+
+            'is_bad_combo': 1 if flag1 == 'dead' else 0
+
+        }
 
     def generate_features(self, df, signal_type):
-        """Generate features with proper dtype handling and validation"""
-        try:
-            if len(df) < 200:
-                logger.warning("Not enough data for feature generation")
-                return None
-            
-            df = df.tail(200).copy()
-            
-            # Set current candle close = open for immediate processing
-            current_candle = df.iloc[-1].copy()
-            current_candle['close'] = current_candle['open']
-            df.iloc[-1] = current_candle
-            
-            # Calculate all technical indicators
-            df = self.calculate_technical_indicators(df)
-            df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
-            df = self.calculate_categorical_features(df)
-            df = self.calculate_minutes_closed(df)
-            
-            # Volume and price-based features
-            df['prev_volume'] = df['volume'].shift(1).fillna(0)
-            df['body_size'] = abs(df['close'] - df['open'])
-            df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
-            df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
-            df['prev_body_size'] = df['body_size'].shift(1).fillna(0)
-            df['prev_wick_up'] = df['wick_up'].shift(1).fillna(0)
-            df['prev_wick_down'] = df['wick_down'].shift(1).fillna(0)
-            
-            # Ratio features with division protection
-            df['price_div_vol'] = np.where(df['garman_klass_vol'] != 0, 
-                                         df['adj close'] / (df['garman_klass_vol'] + 1e-8), 0)
-            df['rsi_div_macd'] = np.where(df['macd_z'] != 0, 
-                                        df['rsi'] / (df['macd_z'] + 1e-8), 0)
-            df['price_div_vwap'] = np.where(df['vwap'] != 0, 
-                                          df['adj close'] / (df['vwap'] + 1e-8), 0)
-            df['sl_div_atr'] = np.where(df['atr_z'] != 0, 
-                                      df['sl_distance'] / (df['atr_z'] + 1e-8), 0)
-            df['tp_div_atr'] = np.where(df['atr_z'] != 0, 
-                                      df['tp_distance'] / (df['atr_z'] + 1e-8), 0)
-            df['rrr_div_rsi'] = np.where(df['rsi'] != 0, 
-                                       df['rrr'] / (df['rsi'] + 1e-8), 0)
-            
-            current_row = df.iloc[-1]
-            combo_flags = self.calculate_combo_flags(current_row, signal_type)
-            
-            # Set flags in dataframe - ensure float conversion
-            for flag_type in ['dead', 'fair', 'fine']:
-                flag_value = 1.0 if combo_flags['combo_flag'] == flag_type else 0.0
-                df[f'combo_flag_{flag_type}'] = flag_value
-                flag2_value = 1.0 if combo_flags['combo_flag2'] == flag_type else 0.0
-                df[f'combo_flag2_{flag_type}'] = flag2_value
-                
-            df['is_bad_combo'] = float(combo_flags['is_bad_combo'])
-            
-            df['crt_BUY'] = float(signal_type == 'BUY')
-            df['crt_SELL'] = float(signal_type == 'SELL')
-            df['trade_type_BUY'] = float(signal_type == 'BUY')
-            df['trade_type_SELL'] = float(signal_type == 'SELL')
-            
-            # Initialize features Series with proper dtype
-            features = pd.Series(index=self.features, dtype=np.float64)
-            
-            # Fill features with proper type conversion
-            for feat in self.features:
-                if feat in df.columns:
-                    value = df[feat].iloc[-1]
-                    # Convert to float, handling different types
-                    if isinstance(value, (bool, np.bool_)):
-                        features[feat] = float(value)
-                    elif isinstance(value, (int, np.integer)):
-                        features[feat] = float(value)
-                    elif isinstance(value, (float, np.floating)):
-                        features[feat] = value
-                    elif pd.isna(value):
-                        features[feat] = 0.0
-                    else:
-                        # Try to convert any other type
-                        try:
-                            features[feat] = float(value)
-                        except (ValueError, TypeError):
-                            features[feat] = 0.0
-                else:
-                    features[feat] = 0.0
-            
-            # Use shifted features for stability with proper type conversion
-            if len(df) >= 2:
-                prev_candle = df.iloc[-2]
-                for feat in self.shift_features:
-                    if feat in features.index and feat in prev_candle:
-                        value = prev_candle[feat]
-                        if isinstance(value, (bool, np.bool_)):
-                            features[feat] = float(value)
-                        elif isinstance(value, (int, np.integer, float, np.floating)):
-                            features[feat] = float(value)
-                        else:
-                            try:
-                                features[feat] = float(value)
-                            except (ValueError, TypeError):
-                                features[feat] = 0.0
-            
-            # Ensure all values are float64
-            features = features.astype(np.float64)
-            
-            # Final validation and cleaning
-            if not self.validate_features(features):
-                logger.warning("Feature validation failed")
-                return None
-        
-            return features
-        except Exception as e:
-            logger.error(f"Error in generate_features: {str(e)}")
-            logger.error(traceback.format_exc())
+
+        if len(df) < 200:
+
             return None
+
+
+
+        df = df.tail(200).copy()
+
+
+
+        # Set current candle close = open for immediate processing
+
+        current_candle = df.iloc[-1].copy()
+
+        current_candle['close'] = current_candle['open']
+
+        df.iloc[-1] = current_candle
+
+
+
+        df = self.calculate_technical_indicators(df)
+
+        df = self.calculate_trade_features(df, signal_type, df.iloc[-1]['open'])
+
+        df = self.calculate_categorical_features(df)
+
+        df = self.calculate_minutes_closed(df)
+
+
+
+        # Volume features now rely solely on shifted values
+
+        df['prev_volume'] = df['volume'].shift(1)
+
+        df['body_size'] = abs(df['close'] - df['open'])
+
+        df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
+
+        df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
+
+        df['prev_body_size'] = df['body_size'].shift(1)
+
+        df['prev_wick_up'] = df['wick_up'].shift(1)
+
+        df['prev_wick_down'] = df['wick_down'].shift(1)
+
+
+
+        df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
+
+        df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
+
+        df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
+
+        df['sl_div_atr'] = df['sl_distance'] / (df['atr_z'] + 1e-6)
+
+        df['tp_div_atr'] = df['tp_distance'] / (df['atr_z'] + 1e-6)
+
+        df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
+
+
+
+        current_row = df.iloc[-1]
+
+        combo_flags = self.calculate_combo_flags(current_row, signal_type)
+
+
+
+        # Set flags in dataframe
+
+        for flag_type in ['dead', 'fair', 'fine']:
+
+            df[f'combo_flag_{flag_type}'] = 1 if combo_flags['combo_flag'] == flag_type else 0
+
+            df[f'combo_flag2_{flag_type}'] = 1 if combo_flags['combo_flag2'] == flag_type else 0
+
+
+
+        df['is_bad_combo'] = combo_flags['is_bad_combo']
+
+
+
+        df['crt_BUY'] = int(signal_type == 'BUY')
+
+        df['crt_SELL'] = int(signal_type == 'SELL')
+
+        df['trade_type_BUY'] = int(signal_type == 'BUY')
+
+        df['trade_type_SELL'] = int(signal_type == 'SELL')
+
+
+
+        features = pd.Series(index=self.features, dtype=float)
+
+        for feat in self.features:
+
+            if feat in df.columns:
+
+                features[feat] = df[feat].iloc[-1]
+
+            else:
+
+                features[feat] = 0
+
+
+
+        # CRITICAL: Using shifted features instead of volume estimation
+
+        if len(df) >= 2:
+
+            prev_candle = df.iloc[-2]
+
+            for feat in self.shift_features:
+
+                if feat in features.index and feat in prev_candle:
+
+                    features[feat] = prev_candle[feat]
+
+
+
+        if features.isna().any():
+
+            for col in features[features.isna()].index:
+
+                features[col] = 0
+
+
+
+        return features
 
 # ========================
 # ENHANCED MODEL LOADER WITH OVERCONFIDENCE DETECTION
