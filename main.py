@@ -561,12 +561,13 @@ class FeatureEngineer:
 
             bb = ta.bbands(close=np.log1p(df['adj close']), length=20)
 
-            # Normalize names for backward compatibility
-            bb = bb.rename(columns={
-                "BBL_20_2": "BBL_20_2.0",
-                "BBM_20_2": "BBM_20_2.0",
-                "BBU_20_2": "BBU_20_2.0"
-            })
+            # Standardize Bollinger band column names
+            df.rename(columns={
+                'bb_l_20_2.0': 'BBL_20_2.0',
+                'bb_m_20_2.0': 'BBM_20_2.0',
+                'bb_u_20_2.0': 'BBU_20_2.0'
+            }, inplace=True)
+
             
             # Attach to df safely
             for col in ["BBL_20_2.0", "BBM_20_2.0", "BBU_20_2.0"]:
