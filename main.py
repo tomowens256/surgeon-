@@ -559,13 +559,19 @@ class FeatureEngineer:
 
 
 
-            bb = ta.bbands(np.log1p(df['adj close']), length=20)
+            bb = ta.bbands(close=np.log1p(df['adj close']), length=20)
 
-            df['bb_low'] = bb['BBL_20_2.0']
-
-            df['bb_mid'] = bb['BBM_20_2.0']
-
+            # Normalize names in case pandas-ta version dropped the ".0"
+            bb = bb.rename(columns={
+                "BBL_20_2": "BBL_20_2.0",
+                "BBM_20_2": "BBM_20_2.0",
+                "BBU_20_2": "BBU_20_2.0"
+            })
+            
+            df['bb_low']  = bb['BBL_20_2.0']
+            df['bb_mid']  = bb['BBM_20_2.0']
             df['bb_high'] = bb['BBU_20_2.0']
+
 
 
 
@@ -575,9 +581,13 @@ class FeatureEngineer:
 
 
 
-            macd = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
+            macd = ta.macd(close=df['adj close'], fast=12, slow=26, signal=9)
 
-            df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
+            if "MACD_12_26_9" in macd.columns:
+                df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
+            else:
+                logger.warning("MACD_12_26_9 not found, filling macd_z with NaN")
+                df['macd_z'] = np.nan
 
 
 
