@@ -561,16 +561,22 @@ class FeatureEngineer:
 
             bb = ta.bbands(close=np.log1p(df['adj close']), length=20)
 
-            # Normalize names in case pandas-ta version dropped the ".0"
+            # Normalize names for backward compatibility
             bb = bb.rename(columns={
                 "BBL_20_2": "BBL_20_2.0",
                 "BBM_20_2": "BBM_20_2.0",
                 "BBU_20_2": "BBU_20_2.0"
             })
             
-            df['bb_low']  = bb['BBL_20_2.0']
-            df['bb_mid']  = bb['BBM_20_2.0']
-            df['bb_high'] = bb['BBU_20_2.0']
+            # Attach to df safely
+            for col in ["BBL_20_2.0", "BBM_20_2.0", "BBU_20_2.0"]:
+                if col in bb.columns:
+                    df[col.replace("BB", "bb_").lower()] = bb[col]
+                else:
+                    logger.warning(f"{col} not found in Bollinger output")
+                    df[col.replace("BB", "bb_").lower()] = np.nan
+
+
 
 
 
