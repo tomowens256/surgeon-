@@ -561,21 +561,18 @@ class FeatureEngineer:
 
             bb = ta.bbands(close=np.log1p(df['adj close']), length=20)
 
-            # Standardize Bollinger band column names
-            df.rename(columns={
-                'bb_l_20_2.0': 'BBL_20_2.0',
-                'bb_m_20_2.0': 'BBM_20_2.0',
-                'bb_u_20_2.0': 'BBU_20_2.0'
-            }, inplace=True)
-
+            # Join Bollinger bands to df
+            df = df.join(bb)
             
-            # Attach to df safely
-            for col in ["BBL_20_2.0", "BBM_20_2.0", "BBU_20_2.0"]:
-                if col in bb.columns:
-                    df[col.replace("BB", "bb_").lower()] = bb[col]
-                else:
-                    logger.warning(f"{col} not found in Bollinger output")
-                    df[col.replace("BB", "bb_").lower()] = np.nan
+            # Rename to match expected names
+            df.rename(columns={
+                'bb_l_20_2.0': 'bb_low',
+                'bb_m_20_2.0': 'bb_mid',
+                'bb_u_20_2.0': 'bb_high'
+            }, inplace=True)
+            
+            logger.debug(f"Columns after Bollinger: {df.filter(like='bb').columns.tolist()}")
+
 
             logger.debug(f"Columns after Bollinger: {df.columns.tolist()}")
 
