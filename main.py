@@ -576,6 +576,7 @@ class FeatureEngineer:
                     logger.warning(f"{col} not found in Bollinger output")
                     df[col.replace("BB", "bb_").lower()] = np.nan
 
+            logger.debug(f"Columns after Bollinger: {df.columns.tolist()}")
 
 
 
@@ -622,6 +623,7 @@ class FeatureEngineer:
             df['vwap'] = vwap_num / vwap_den
 
             df['vwap_std'] = df['vwap'].rolling(window=20).std()
+            logger.debug(f"Final columns in calculate_technical_indicators: {df.columns.tolist()}")
 
 
 
