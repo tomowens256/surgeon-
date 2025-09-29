@@ -590,10 +590,12 @@ class FeatureEngineer:
             macd = ta.macd(close=df['adj close'], fast=12, slow=26, signal=9)
 
             if "MACD_12_26_9" in macd.columns:
-                df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
+                macd_line = macd["MACD_12_26_9"]
+                df["macd_z"] = (macd_line - macd_line.mean()) / macd_line.std()
             else:
                 logger.warning("MACD_12_26_9 not found, filling macd_z with NaN")
-                df['macd_z'] = np.nan
+                df["macd_z"] = np.nan
+
 
 
 
