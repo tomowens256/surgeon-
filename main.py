@@ -559,19 +559,28 @@ class FeatureEngineer:
 
 
 
-            bb = ta.bbands(close=np.log1p(df['adj close']), length=20)
-
-            # Join without duplicate suffixes
-            df = df.join(bb, rsuffix="")
+            # --- FIXED Bollinger Bands ---
+            bbands = ta.bbands(close=df["close"], length=20, std=2.0)
             
-            # Rename to clean names your bot expects
-            df.rename(columns={
-                'BBL_20_2.0': 'bb_low',
-                'BBM_20_2.0': 'bb_mid',
-                'BBU_20_2.0': 'bb_high'
-            }, inplace=True)
+            if bbands is not None:
+                # Properly rename Bollinger Bands columns to match your expected features
+                bbands_columns = {
+                    'BBL_20_2.0': 'bb_low',
+                    'BBM_20_2.0': 'bb_mid', 
+                    'BBU_20_2.0': 'bb_high'
+                }
+                
+                # Only take the columns we need
+                for old_col, new_col in bbands_columns.items():
+                    if old_col in bbands.columns:
+                        df[new_col] = bbands[old_col]
+                    else:
+                        # If column doesn't exist, create with NaN
+                        df[new_col] = np.nan
+                        logger.warning(f"Bollinger Band column {old_col} not found")
             
-            logger.debug(f"Columns after Bollinger: {df.filter(like='bb').columns.tolist()}")
+            logger.debug(f"Columns after Bollinger: {list(df.columns)}")
+                                    
 
 
 
@@ -1152,57 +1161,56 @@ class FeatureEngineer:
 
 
 
-            # Set flags in dataframe
-
+            # Set flags in dataframe - FIXED: Convert to float
             for flag_type in ['dead', 'fair', 'fine']:
-
-                df[f'combo_flag_{flag_type}'] = 1 if combo_flags['combo_flag'] == flag_type else 0
-
-                df[f'combo_flag2_{flag_type}'] = 1 if combo_flags['combo_flag2'] == flag_type else 0
-
-
-
-            df['is_bad_combo'] = combo_flags['is_bad_combo']
-
-
-
-            df['crt_BUY'] = int(signal_type == 'BUY')
-
-            df['crt_SELL'] = int(signal_type == 'SELL')
-
-            df['trade_type_BUY'] = int(signal_type == 'BUY')
-
-            df['trade_type_SELL'] = int(signal_type == 'SELL')
+                df[f'combo_flag_{flag_type}'] = 1.0 if combo_flags['combo_flag'] == flag_type else 0.0
+                df[f'combo_flag2_{flag_type}'] = 1.0 if combo_flags['combo_flag2'] == flag_type else 0.0
+            
+            df['is_bad_combo'] = float(combo_flags['is_bad_combo'])
+            df['crt_BUY'] = float(signal_type == 'BUY')
+            df['crt_SELL'] = float(signal_type == 'SELL')
+            df['trade_type_BUY'] = float(signal_type == 'BUY')
+            df['trade_type_SELL'] = float(signal_type == 'SELL')
 
 
 
             features = pd.Series(index=self.features, dtype=float)
-            logger.error(print(features))#for debug bro
 
             for feat in self.features:
-
                 if feat in df.columns:
-
-                    features[feat] = df[feat].iloc[-1]
-
+                    value = df[feat].iloc[-1]
+                    # Convert boolean and integer types to float
+                    if isinstance(value, (bool, np.bool_)):
+                        features[feat] = float(value)
+                    elif isinstance(value, (int, np.integer)):
+                        features[feat] = float(value)
+                    elif pd.isna(value):
+                        features[feat] = 0.0
+                    else:
+                        features[feat] = value
                 else:
-
-                    features[feat] = 0
+                    features[feat] = 0.0
+            
+            # Debug log instead of error log
+            logger.debug(f"Generated features sample: {features.head(10).to_dict()}")
 
 
 
             # CRITICAL: Using shifted features instead of volume estimation
-
             if len(df) >= 2:
-
                 prev_candle = df.iloc[-2]
-
                 for feat in self.shift_features:
-
                     if feat in features.index and feat in prev_candle:
-
-                        features[feat] = prev_candle[feat]
-
+                        value = prev_candle[feat]
+                        # Convert shifted values to float as well
+                        if isinstance(value, (bool, np.bool_)):
+                            features[feat] = float(value)
+                        elif isinstance(value, (int, np.integer)):
+                            features[feat] = float(value)
+                        elif pd.isna(value):
+                            features[feat] = 0.0
+                        else:
+                            features[feat] = value
 
 
             if features.isna().any():
