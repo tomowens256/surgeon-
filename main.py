@@ -1282,18 +1282,7 @@ class ModelLoader:
             logger.error(f"Model loading failed: {str(e)}")
             raise RuntimeError(f"Model loading failed: {str(e)}")
     
-    def detect_overconfidence_pattern(self, prediction):
-        """Detect if model is showing overconfidence patterns"""
-        self.prediction_history.append(prediction)
-        if len(self.prediction_history) > self.max_history_size:
-            self.prediction_history.pop(0)
-            
-        if len(self.prediction_history) < 10:
-            return False
-            
-        # Check if recent predictions are consistently overconfident
-        recent_overconfident = sum(p > self.overconfidence_threshold for p in self.prediction_history[-10:])
-        return recent_overconfident >= 8  # 80% of recent predictions overconfident
+    
         
     def predict(self, features):
         """Enhanced prediction with overconfidence detection"""
@@ -1308,29 +1297,6 @@ class ModelLoader:
         reshaped = scaled.reshape(1, 1, -1)
         prediction = self.model.predict(reshaped, verbose=0)[0][0]
         
-        # Overconfidence detection and correction
-        if prediction > 0.99:
-            logger.warning(f"⚠️ Suspicious prediction: {prediction:.6f}")
-            
-            # Get raw model output before activation for analysis
-            try:
-                # For models with custom layers, we may need to access intermediate outputs
-                raw_output = self.model(reshaped, training=False).numpy()[0][0]
-                logger.warning(f"Raw model output: {raw_output:.6f}")
-                
-                # Apply conservative correction for extreme overconfidence
-                if prediction > 0.995:
-                    correction_factor = 0.9  # Reduce extreme confidence
-                    corrected_prediction = prediction * correction_factor
-                    logger.warning(f"Applying overconfidence correction: {prediction:.6f} -> {corrected_prediction:.6f}")
-                    prediction = corrected_prediction
-                    
-            except Exception as e:
-                logger.error(f"Error in overconfidence analysis: {str(e)}")
-        
-        # Check for pattern of overconfidence
-        if self.detect_overconfidence_pattern(prediction):
-            logger.error("🚨 PATTERN DETECTED: Model showing consistent overconfidence behavior!")
             
         logger.debug(f"Prediction complete: {prediction:.6f}")
         return prediction
