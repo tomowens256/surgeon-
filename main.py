@@ -560,48 +560,36 @@ class FeatureEngineer:
 
 
             # --- FIXED Bollinger Bands ---
-            # TEMPORARY DEBUG - Add this right before Bollinger Bands calculation
-            logger.debug(f"DataFrame shape before indicators: {df.shape}")
-            logger.debug(f"DataFrame columns: {df.columns.tolist()}")
-            
-            # Test Bollinger Bands with different parameters
-            test_bbands = ta.bbands(close=df["close"], length=20, std=2)
-            logger.debug(f"TEST Bollinger columns with std=2: {test_bbands.columns.tolist() if test_bbands is not None else 'None'}")
-            
-            if bbands is not None:
-                # Debug: Log what columns we actually get
-                logger.debug(f"Raw Bollinger Bands columns: {bbands.columns.tolist()}")
+            try:
+                bbands = ta.bbands(close=df["close"], length=20, std=2.0)
                 
-                # Try different possible column name patterns
-                bband_patterns = [
-                    # Common patterns
-                    {'BBL_20_2.0': 'bb_low', 'BBM_20_2.0': 'bb_mid', 'BBU_20_2.0': 'bb_high'},
-                    {'BBL_20_2': 'bb_low', 'BBM_20_2': 'bb_mid', 'BBU_20_2': 'bb_high'},
-                    {'BBL_20': 'bb_low', 'BBM_20': 'bb_mid', 'BBU_20': 'bb_high'},
-                    # Fallback: use first 3 columns if standard patterns don't work
-                    {bbands.columns[0]: 'bb_low', bbands.columns[1]: 'bb_mid', bbands.columns[2]: 'bb_high'}
-                ]
-                
-                success = False
-                for pattern in bband_patterns:
-                    if all(col in bbands.columns for col in pattern.keys()):
-                        for old_col, new_col in pattern.items():
-                            df[new_col] = bbands[old_col]
-                        success = True
-                        logger.debug(f"Used Bollinger pattern: {list(pattern.keys())}")
-                        break
-                
-                if not success and len(bbands.columns) >= 3:
-                    # Last resort: use first three columns
-                    df['bb_low'] = bbands.iloc[:, 0]
-                    df['bb_mid'] = bbands.iloc[:, 1] 
-                    df['bb_high'] = bbands.iloc[:, 2]
-                    logger.debug("Used fallback: first three Bollinger columns")
-                elif not success:
-                    logger.error("Could not extract Bollinger Bands columns")
+                if bbands is not None and not bbands.empty:
+                    # Map the actual column names to your expected feature names
+                    column_mapping = {
+                        'BBL_20_2.0_2.0': 'bb_low',
+                        'BBM_20_2.0_2.0': 'bb_mid', 
+                        'BBU_20_2.0_2.0': 'bb_high'
+                    }
+                    
+                    for actual_col, expected_col in column_mapping.items():
+                        if actual_col in bbands.columns:
+                            df[expected_col] = bbands[actual_col]
+                        else:
+                            df[expected_col] = np.nan
+                            logger.warning(f"Bollinger Band column {actual_col} not found")
+                else:
+                    # Create empty columns if bbands calculation failed
                     df['bb_low'] = np.nan
-                    df['bb_mid'] = np.nan
+                    df['bb_mid'] = np.nan  
                     df['bb_high'] = np.nan
+                    logger.error("Bollinger Bands calculation returned empty")
+                    
+            except Exception as e:
+                logger.error(f"Bollinger Bands calculation failed: {str(e)}")
+                # Create fallback columns
+                df['bb_low'] = np.nan
+                df['bb_mid'] = np.nan
+                df['bb_high'] = np.nan
                                     
 
 
@@ -614,13 +602,19 @@ class FeatureEngineer:
 
 
 
-            macd = ta.macd(close=df['adj close'], fast=12, slow=26, signal=9)
-
-            if "MACD_12_26_9" in macd.columns:
-                macd_line = macd["MACD_12_26_9"]
-                df["macd_z"] = (macd_line - macd_line.mean()) / macd_line.std()
-            else:
-                logger.warning("MACD_12_26_9 not found, filling macd_z with NaN")
+            # --- FIXED MACD Calculation ---
+            try:
+                macd = ta.macd(close=df['adj close'], fast=12, slow=26, signal=9)
+                
+                if macd is not None and "MACD_12_26_9" in macd.columns:
+                    macd_line = macd["MACD_12_26_9"]
+                    df["macd_z"] = (macd_line - macd_line.mean()) / macd_line.std()
+                else:
+                    df["macd_z"] = np.nan
+                    logger.warning("MACD calculation failed, filling with NaN")
+                    
+            except Exception as e:
+                logger.error(f"MACD calculation failed: {str(e)}")
                 df["macd_z"] = np.nan
 
 
@@ -1164,8 +1158,16 @@ class FeatureEngineer:
 
 
             df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
-
+            # Safety check for required columns
+            required_columns = ['rsi', 'macd_z', 'garman_klass_vol', 'vwap', 'atr_z']
+            for col in required_columns:
+                if col not in df.columns:
+                    logger.warning(f"Required column {col} missing, filling with NaN")
+                    df[col] = np.nan
+            
+            # Now safely calculate the derived features
             df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
+            
 
             df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
 
