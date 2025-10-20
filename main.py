@@ -1054,10 +1054,12 @@ class WorkingTradingBot:
                     time.sleep(sleep_seconds)
                 
                 # Fetch data
+                logger.debug("waiting for data to be available on api")
+                time.sleep(5)
                 logger.debug("Fetching candle data...")
                 new_data = fetch_candles(
                     self.timeframe,
-                    count=100,  # Reduced for speed
+                    count=210,  # Reduced for speed
                     api_key=self.credentials['oanda_api_key']
                 )
                 
@@ -1088,7 +1090,7 @@ class WorkingTradingBot:
                             logger.info("Using dummy prediction: 0.5")
                         
                         # Send signal if confidence is reasonable
-                        if prediction > 0.3:  # Lower threshold to catch more signals
+                        if prediction > 0.9:  # Lower threshold to catch more signals
                             self.send_signal(signal_type, signal_data, prediction, features)
                         else:
                             logger.info(f"Signal below threshold: {prediction:.4f}")
