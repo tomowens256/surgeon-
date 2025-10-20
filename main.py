@@ -1992,15 +1992,34 @@ def setup_robust_logging():
     """Setup comprehensive logging"""
     log_format = '%(asctime)s [%(levelname)s] [%(threadName)s] [%(filename)s:%(lineno)d] %(message)s'
     
-    logging.basicConfig(
-        level=logging.INFO,
-        format=log_format,
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler('trading_bot_robust.log'),
-            logging.FileHandler('trading_bot_errors.log', level=logging.ERROR)
-        ]
-    )
+    # Create handlers
+    stream_handler = logging.StreamHandler()
+    file_handler = logging.FileHandler('trading_bot_robust.log')
+    error_file_handler = logging.FileHandler('trading_bot_errors.log')
+    
+    # Set levels
+    stream_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG)
+    error_file_handler.setLevel(logging.ERROR)
+    
+    # Create formatter
+    formatter = logging.Formatter(log_format)
+    stream_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+    error_file_handler.setFormatter(formatter)
+    
+    # Get the root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    
+    # Clear any existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Add our handlers
+    root_logger.addHandler(stream_handler)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(error_file_handler)
     
     # Suppress noisy loggers
     for logger_name in ['tensorflow', 'ngrok', 'numba', 'httpx', 'httpcore']:
