@@ -1,6 +1,5 @@
 # ========================
-# COMPLETE UPDATED MAIN.PY FOR CURRENT LIBRARY VERSIONS
-# MAINTAINS EXACT SAME CALCULATION LOGIC WITH VERSION COMPATIBILITY
+# COMPLETE ROBUST TRADING BOT SCRIPT
 # ========================
 
 # Add to your imports section
@@ -44,6 +43,7 @@ import requests
 import re
 import traceback
 import joblib
+import psutil
 from datetime import datetime, timedelta
 from oandapyV20 import API
 from oandapyV20.exceptions import V20Error
@@ -51,6 +51,9 @@ import oandapyV20.endpoints.instruments as instruments
 import tensorflow as tf
 from google.colab import drive
 from IPython.display import clear_output
+from typing import Optional, Dict, List, Any, Tuple
+import warnings
+warnings.filterwarnings('ignore')
 
 import logging
 logging.getLogger('numba').setLevel(logging.WARNING)
@@ -61,7 +64,24 @@ logging.getLogger('numba').setLevel(logging.WARNING)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 tf.get_logger().setLevel('ERROR')
 
+# ========================
+# CUSTOM EXCEPTIONS
+# ========================
+class ValidationError(Exception):
+    """Custom exception for validation errors"""
+    pass
 
+class DataIntegrityError(Exception):
+    """Custom exception for data issues"""
+    pass
+
+class CredentialsError(Exception):
+    """Custom exception for credential issues"""
+    pass
+
+class ModelLoadingError(Exception):
+    """Custom exception for model loading issues"""
+    pass
 
 # ========================
 # CONSTANTS & CONFIG
@@ -84,11 +104,11 @@ logging.basicConfig(
     format=log_format,
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('trading_bot_debug.log')
+        logging.FileHandler('trading_bot_robust.log')
     ]
 )
 numba_logger = logging.getLogger('numba')
-numba_logger.setLevel(logging.WARNING)  # Change to INFO if you need Numba messages
+numba_logger.setLevel(logging.WARNING)
 
 # Optional: Use environment variable for internal Numba controls
 os.environ['NUMBA_DEBUG'] = '0'
@@ -169,6 +189,75 @@ COMBO_FLAGS2 = {
     "nan_(40, 50]_(-0.138, 0.134]": "dead", "nan_(40, 50]_(-0.496, -0.138]": "dead",
     "nan_(50, 60]_(0.134, 0.527]": "dead", "nan_(50, 60]_(0.527, 9.246]": "dead"
 }
+
+# ========================
+# VALIDATION FUNCTIONS
+# ========================
+def validate_credentials(credentials):
+    """Comprehensive credential validation"""
+    required = {
+        'telegram_token': (str, 30, 100),  # min/max length
+        'telegram_chat_id': (str, 5, 20),
+        'oanda_api_key': (str, 20, 100),
+        'oanda_account_id': (str, 5, 20)
+    }
+    
+    errors = []
+    for key, (expected_type, min_len, max_len) in required.items():
+        value = credentials.get(key)
+        
+        if not value:
+            errors.append(f"Missing {key}")
+            continue
+            
+        if not isinstance(value, expected_type):
+            errors.append(f"{key} should be {expected_type.__name__}, got {type(value).__name__}")
+            
+        if not (min_len <= len(str(value)) <= max_len):
+            errors.append(f"{key} length invalid: {len(str(value))} chars (expected {min_len}-{max_len})")
+    
+    if errors:
+        raise CredentialsError(f"Credential validation failed: {', '.join(errors)}")
+    
+    return True
+
+def validate_dataframe(df, min_rows=50, required_cols=None):
+    """Validate DataFrame integrity"""
+    if required_cols is None:
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+    
+    if df is None or df.empty:
+        raise DataIntegrityError("DataFrame is None or empty")
+    
+    if len(df) < min_rows:
+        raise DataIntegrityError(f"Insufficient data: {len(df)} rows (min {min_rows})")
+    
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise DataIntegrityError(f"Missing required columns: {missing_cols}")
+    
+    # Check for NaN values in critical columns
+    nan_check = df[required_cols].isna().sum()
+    if nan_check.any():
+        problematic = nan_check[nan_check > 0]
+        raise DataIntegrityError(f"NaN values detected: {dict(problematic)}")
+    
+    # Check for reasonable price values
+    price_stats = df[['open', 'high', 'low', 'close']].describe()
+    if (price_stats.loc['min'] < 100).any() or (price_stats.loc['max'] > 5000).any():
+        raise DataIntegrityError(f"Unrealistic price values: {dict(price_stats.loc[['min', 'max']])}")
+    
+    return True
+
+def safe_float_conversion(value, default=0.0, field_name="value"):
+    """Safely convert to float with error handling"""
+    try:
+        if value is None or pd.isna(value):
+            return default
+        return float(value)
+    except (TypeError, ValueError) as e:
+        logger.warning(f"Failed to convert {field_name} to float: {value}, using default {default}")
+        return default
 
 # ========================
 # COLAB SETUP FUNCTION
@@ -349,29 +438,189 @@ def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
     return pd.DataFrame()
 
 # ========================
-# UPDATED FEATURE ENGINEER FOR CURRENT VERSIONS
+# ROBUST MODEL LOADER WITH HEALTH CHECKS
 # ========================
-import pandas as pd
-import numpy as np
-import pandas_ta as ta
-from datetime import datetime
-import logging
-import traceback
+class RobustModelLoader:
+    def __init__(self, model_path, scaler_path, max_retries=3):
+        self.model_path = model_path
+        self.scaler_path = scaler_path
+        self.max_retries = max_retries
+        self.last_health_check = None
+        self.load_attempts = 0
+        
+        self._validate_paths()
+        self._load_with_retry()
+    
+    def _validate_paths(self):
+        """Validate model and scaler paths"""
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(f"Model file not found: {self.model_path}")
+        
+        if not os.path.exists(self.scaler_path):
+            raise FileNotFoundError(f"Scaler file not found: {self.scaler_path}")
+        
+        # Check file sizes
+        model_size = os.path.getsize(self.model_path)
+        scaler_size = os.path.getsize(self.scaler_path)
+        
+        logger.debug(f"Model size: {model_size:,} bytes, Scaler size: {scaler_size:,} bytes")
+        
+        if model_size < MODEL_MIN_SIZE:
+            logger.warning(f"Model file seems small: {model_size:,} bytes (expected > {MODEL_MIN_SIZE:,})")
+        
+        if scaler_size < SCALER_MIN_SIZE:
+            logger.warning(f"Scaler file seems small: {scaler_size:,} bytes (expected > {SCALER_MIN_SIZE:,})")
+    
+    def _load_with_retry(self):
+        """Load model with retry logic"""
+        for attempt in range(self.max_retries):
+            try:
+                logger.debug(f"Loading model attempt {attempt + 1}/{self.max_retries}")
+                
+                # Load model with compatibility settings
+                self.model = tf.keras.models.load_model(
+                    self.model_path, 
+                    compile=False,
+                    safe_mode=False  # Disable safe mode for performance
+                )
+                
+                # Load scaler
+                self.scaler = joblib.load(self.scaler_path)
+                
+                # Verify loaded objects
+                self._verify_loaded_objects()
+                
+                logger.info(f"Model and scaler loaded successfully on attempt {attempt + 1}")
+                self.load_attempts = attempt + 1
+                self.last_health_check = time.time()
+                return
+                
+            except Exception as e:
+                logger.error(f"Load attempt {attempt + 1} failed: {str(e)}")
+                if attempt == self.max_retries - 1:
+                    raise ModelLoadingError(f"Failed to load model after {self.max_retries} attempts: {str(e)}")
+                
+                wait_time = 2 ** attempt  # Exponential backoff
+                logger.info(f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+    
+    def _verify_loaded_objects(self):
+        """Verify that loaded model and scaler are functional"""
+        # Test model with dummy input
+        if hasattr(self.scaler, 'feature_names_in_'):
+            feature_count = len(self.scaler.feature_names_in_)
+        else:
+            # Estimate feature count from scaler parameters
+            feature_count = len(self.scaler.mean_) if hasattr(self.scaler, 'mean_') else 100
+        
+        dummy_features = np.random.random((1, feature_count))
+        dummy_scaled = self.scaler.transform(dummy_features)
+        dummy_reshaped = dummy_scaled.reshape(1, 1, -1)
+        
+        try:
+            prediction = self.model.predict(dummy_reshaped, verbose=0)
+            logger.debug(f"Model test prediction: {prediction[0][0]:.6f}")
+        except Exception as e:
+            raise RuntimeError(f"Model verification failed: {str(e)}")
+        
+        # Verify scaler attributes
+        required_attrs = ['mean_', 'scale_']
+        for attr in required_attrs:
+            if not hasattr(self.scaler, attr):
+                logger.warning(f"Scaler missing attribute: {attr}")
+    
+    def health_check(self):
+        """Perform health check on model and scaler"""
+        try:
+            # Test prediction with current timestamp
+            if hasattr(self.scaler, 'feature_names_in_'):
+                feature_count = len(self.scaler.feature_names_in_)
+            else:
+                feature_count = len(self.scaler.mean_) if hasattr(self.scaler, 'mean_') else 100
+                
+            test_features = np.random.random((1, feature_count))
+            _ = self.predict(test_features[0])
+            self.last_health_check = time.time()
+            return True
+        except Exception as e:
+            logger.error(f"Model health check failed: {str(e)}")
+            return False
+    
+    def predict(self, features):
+        """Enhanced prediction with comprehensive validation"""
+        # Validate input
+        if not isinstance(features, (np.ndarray, list, pd.Series)):
+            raise ValueError(f"Features must be array-like, got {type(features)}")
+        
+        features = np.array(features, dtype=np.float64)
+        
+        if features.ndim != 1:
+            raise ValueError(f"Features must be 1D, got shape {features.shape}")
+        
+        # Determine expected feature count
+        if hasattr(self.scaler, 'feature_names_in_'):
+            expected_features = len(self.scaler.feature_names_in_)
+        elif hasattr(self.scaler, 'n_features_in_'):
+            expected_features = self.scaler.n_features_in_
+        elif hasattr(self.scaler, 'mean_'):
+            expected_features = len(self.scaler.mean_)
+        else:
+            expected_features = len(features)  # Assume it matches
+            
+        if len(features) != expected_features:
+            logger.warning(f"Feature dimension mismatch: expected {expected_features}, got {len(features)}. Using available features.")
+            # Truncate or pad features to match expected count
+            if len(features) > expected_features:
+                features = features[:expected_features]
+            else:
+                features = np.pad(features, (0, expected_features - len(features)), 'constant')
+        
+        # Check for extreme values
+        extreme_mask = np.abs(features) > 1e6
+        if extreme_mask.any():
+            logger.warning(f"Extreme feature values detected at indices: {np.where(extreme_mask)[0]}")
+        
+        # Check for NaN/Inf
+        if np.any(~np.isfinite(features)):
+            logger.error("Non-finite values in features")
+            return 0.0
+        
+        try:
+            # Scale features
+            scaled = self.scaler.transform([features])
+            
+            # Check for scaling issues
+            if np.any(~np.isfinite(scaled)):
+                logger.error("Non-finite values after scaling")
+                return 0.0
+            
+            # Reshape for LSTM
+            reshaped = scaled.reshape(1, 1, -1)
+            
+            # Predict
+            prediction = self.model.predict(reshaped, verbose=0)[0][0]
+            
+            # Validate prediction
+            if not np.isfinite(prediction):
+                logger.error(f"Invalid prediction: {prediction}")
+                return 0.0
+            
+            # Clamp to valid range
+            prediction = np.clip(prediction, 0.0, 1.0)
+            
+            logger.debug(f"Prediction successful: {prediction:.6f}")
+            return float(prediction)
+            
+        except Exception as e:
+            logger.error(f"Prediction failed: {str(e)}")
+            # Return neutral prediction on error
+            return 0.5
 
-logger = logging.getLogger(__name__)
-
-import pandas as pd
-import numpy as np
-import logging
-from typing import Optional, List, Dict, Any
-import traceback
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-class FeatureEngineer:
-    def __init__(self, timeframe: str):
+# ========================
+# ROBUST FEATURE ENGINEER
+# ========================
+class RobustFeatureEngineer:
+    def __init__(self, timeframe):
         """
         Initialize FeatureEngineer for specific timeframe
         
@@ -379,7 +628,7 @@ class FeatureEngineer:
             timeframe: '15m' or '5m' timeframe
         """
         self.timeframe = timeframe
-        logger.debug(f"Initializing FeatureEngineer for {timeframe}")
+        logger.debug(f"Initializing RobustFeatureEngineer for {timeframe}")
         
         # Define features based on timeframe
         if timeframe == '15m':
@@ -447,6 +696,9 @@ class FeatureEngineer:
         self.tf_to_session_hours = {
             '1m': 1.6, '5m': 8, '15m': 24, '30m': 48, '1h': 96, '4h': 384, '1d': 2304
         }
+        
+        # Validation statistics
+        self.feature_validation_stats = {}
 
     def _initialize_combo_dictionary(self) -> Dict[str, float]:
         """Initialize combo dictionary with win rates"""
@@ -677,6 +929,43 @@ class FeatureEngineer:
         except Exception as e:
             logger.error(f"Error in calculate_trend_indicators: {str(e)}")
             return df
+
+    def calculate_crt_signal(self, df: pd.DataFrame) -> Tuple[Optional[str], Optional[Dict]]:
+        """Calculate CRT signal with robust error handling"""
+        try:
+            if len(df) < 2:
+                return None, None
+            
+            # Use the last complete candle for signal detection
+            current_candle = df.iloc[-1]
+            prev_candle = df.iloc[-2]
+            
+            # CRT Logic
+            if (prev_candle['close'] > prev_candle['open'] and  # Previous candle bullish
+                current_candle['open'] > prev_candle['high'] and  # Gap up
+                current_candle['close'] < current_candle['open']):  # Current candle bearish
+                return 'SELL', {
+                    'time': current_candle['time'],
+                    'entry': current_candle['open'],
+                    'sl': prev_candle['high'],
+                    'tp': current_candle['open'] - 4 * (current_candle['open'] - prev_candle['high'])
+                }
+            
+            elif (prev_candle['close'] < prev_candle['open'] and  # Previous candle bearish
+                  current_candle['open'] < prev_candle['low'] and  # Gap down
+                  current_candle['close'] > current_candle['open']):  # Current candle bullish
+                return 'BUY', {
+                    'time': current_candle['time'],
+                    'entry': current_candle['open'],
+                    'sl': prev_candle['low'],
+                    'tp': current_candle['open'] + 4 * (prev_candle['low'] - current_candle['open'])
+                }
+            
+            return None, None
+            
+        except Exception as e:
+            logger.error(f"Error in calculate_crt_signal: {str(e)}")
+            return None, None
 
     def calculate_trade_features(self, df: pd.DataFrame, signal_type: str) -> pd.DataFrame:
         """Calculate trade-related features"""
@@ -1018,286 +1307,137 @@ class FeatureEngineer:
             logger.error(f"Error in calculate_one_hot_features: {str(e)}")
             return df
 
-    def generate_features(self, df: pd.DataFrame, signal_type: str) -> Optional[pd.Series]:
-        """Main feature generation pipeline - returns features in EXACT order"""
+    def _safe_feature_value(self, value, feature_name):
+        """Safely convert feature value with validation"""
         try:
-            if len(df) < 200:
-                logger.warning("Not enough data for feature generation")
-                return None
+            if pd.isna(value):
+                return 0.0
             
-            df = df.tail(200).copy()
+            if isinstance(value, (bool, np.bool_)):
+                return float(value)
+            
+            if isinstance(value, (int, np.integer, float, np.floating)):
+                result = float(value)
+                # Check for extreme values
+                if abs(result) > 1e6:
+                    logger.warning(f"Extreme value for {feature_name}: {result}")
+                    result = np.clip(result, -1e6, 1e6)
+                return result
+            
+            # Try to convert string or other types
+            return float(value)
+            
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Failed to convert feature {feature_name}: {value} ({type(value)}), using 0.0")
+            return 0.0
+
+    def _validate_feature_vector(self, features):
+        """Validate the final feature vector"""
+        # Check for NaN values
+        nan_features = features.isna()
+        if nan_features.any():
+            nan_names = features.index[nan_features].tolist()
+            logger.warning(f"NaN values in features: {nan_names}")
+            features.fillna(0.0, inplace=True)
+        
+        # Check for infinite values
+        infinite_mask = ~np.isfinite(features)
+        if infinite_mask.any():
+            infinite_names = features.index[infinite_mask].tolist()
+            logger.warning(f"Infinite values in features: {infinite_names}")
+            features[infinite_mask] = 0.0
+        
+        # Update validation statistics
+        for feat in features.index:
+            value = features[feat]
+            if feat not in self.feature_validation_stats:
+                self.feature_validation_stats[feat] = {'count': 0, 'min': float('inf'), 'max': float('-inf')}
+            
+            stats = self.feature_validation_stats[feat]
+            stats['count'] += 1
+            stats['min'] = min(stats['min'], value)
+            stats['max'] = max(stats['max'], value)
+
+    def generate_features(self, df: pd.DataFrame, signal_type: str) -> Optional[pd.Series]:
+        """Robust feature generation with comprehensive validation"""
+        try:
+            # Input validation
+            validate_dataframe(df, min_rows=100, required_cols=['open', 'high', 'low', 'close', 'volume'])
+            
+            if signal_type not in ['BUY', 'SELL']:
+                raise ValidationError(f"Invalid signal type: {signal_type}")
+            
+            if len(df) < 200:
+                logger.warning(f"Insufficient data: {len(df)} rows, using available data")
+            
+            # Use the last 200 rows or available data
+            working_df = df.tail(200).copy()
             
             # Set current candle close = open for immediate processing
-            current_candle = df.iloc[-1].copy()
-            current_candle['close'] = current_candle['open']
-            df.iloc[-1] = current_candle
+            if len(working_df) > 0:
+                current_candle = working_df.iloc[-1].copy()
+                current_candle['close'] = current_candle['open']
+                working_df.iloc[-1] = current_candle
             
-            # Execute feature engineering pipeline
-            pipeline = [
-                self.calculate_technical_indicators,
-                self.calculate_vwap_bands,
-                self.calculate_trend_indicators,
-                lambda x: self.calculate_trade_features(x, signal_type),
-                self.calculate_candle_metrics,
-                self.calculate_advanced_time_features,
-                self.calculate_session_time_features,
-                self.calculate_volume_bins,
-                self.calculate_ratio_features,
-                self.create_bins,
-                self.calculate_one_hot_features,
-                self.calculate_combo_flags
+            # Execute feature engineering pipeline with error handling per step
+            pipeline_steps = [
+                ('technical_indicators', self.calculate_technical_indicators),
+                ('vwap_bands', self.calculate_vwap_bands),
+                ('trend_indicators', self.calculate_trend_indicators),
+                ('trade_features', lambda x: self.calculate_trade_features(x, signal_type)),
+                ('candle_metrics', self.calculate_candle_metrics),
+                ('time_features', self.calculate_advanced_time_features),
+                ('session_features', self.calculate_session_time_features),
+                ('volume_bins', self.calculate_volume_bins),
+                ('ratio_features', self.calculate_ratio_features),
+                ('bins', self.create_bins),
+                ('one_hot_features', self.calculate_one_hot_features),
+                ('combo_flags', self.calculate_combo_flags)
             ]
             
-            for step in pipeline:
-                df = step(df)
-                if df is None:
-                    logger.error("Pipeline step returned None")
-                    return None
+            for step_name, step_func in pipeline_steps:
+                try:
+                    working_df = step_func(working_df)
+                    if working_df is None:
+                        raise DataIntegrityError(f"Pipeline step {step_name} returned None")
+                    
+                    # Validate step output
+                    if len(working_df) == 0:
+                        raise DataIntegrityError(f"Pipeline step {step_name} produced empty DataFrame")
+                        
+                except Exception as e:
+                    logger.error(f"Pipeline step {step_name} failed: {str(e)}")
+                    # Continue with available data but log error
+                    continue
             
-            # Create final feature vector in EXACT order
+            # Create final feature vector
             features = pd.Series(index=self.feature_columns, dtype=float)
             
             for feat in self.feature_columns:
-                if feat in df.columns:
-                    value = df[feat].iloc[-1]
-                    if pd.isna(value):
-                        features[feat] = 0.0
-                    elif isinstance(value, (bool, np.bool_)):
-                        features[feat] = float(value)
-                    elif isinstance(value, (int, np.integer)):
-                        features[feat] = float(value)
-                    else:
-                        features[feat] = float(value) if isinstance(value, (float, np.float64)) else str(value)
+                if feat in working_df.columns:
+                    value = working_df[feat].iloc[-1]
+                    features[feat] = self._safe_feature_value(value, feat)
                 else:
                     features[feat] = 0.0
+                    logger.debug(f"Missing feature filled with 0: {feat}")
             
-            # Validate all features are present
+            # Validate feature completeness
             missing_features = set(self.feature_columns) - set(features.index)
             if missing_features:
-                logger.warning(f"Missing features: {missing_features}")
+                logger.warning(f"Missing {len(missing_features)} features, filling with zeros")
                 for feat in missing_features:
                     features[feat] = 0.0
             
-            logger.debug(f"Feature generation successful: {len(features)} features for {self.timeframe}")
-            logger.debug(f"Combo flags: dead={features['combo_flag_dead']}, fair={features['combo_flag_fair']}, fine={features['combo_flag_fine']}")
-            logger.debug(f"Combo flags2: dead={features['combo_flag2_dead']}, fair={features['combo_flag2_fair']}, fine={features['combo_flag2_fine']}")
-            logger.debug(f"Is bad combo: {features['is_bad_combo']}")
+            # Final feature validation
+            self._validate_feature_vector(features)
             
-            return features[self.feature_columns]  # Ensure exact order
+            logger.debug(f"Feature generation successful: {len(features)} features")
+            return features[self.feature_columns]
             
         except Exception as e:
-            logger.error(f"Error in generate_features: {str(e)}")
+            logger.error(f"Feature generation failed: {str(e)}")
             logger.error(traceback.format_exc())
             return None
-
-
-# SHIFTING PROCEDURE AFTER FEATURE GENERATION
-def shift_features_after_generation(x: pd.DataFrame) -> pd.DataFrame:
-    """
-    Shift features after generation to use previous candle's data for prediction
-    
-    Args:
-        x: DataFrame with generated features
-        
-    Returns:
-        DataFrame with shifted features
-    """
-    try:
-        # 1️⃣ Your current dataframe columns
-        available_cols = x.columns.tolist()
-
-        # 2️⃣ Your intended columns to shift
-        shi = ['adj close',
-         'garman_klass_vol',
-         'rsi_20',
-         'bb_low',
-         'bb_mid',
-         'bb_high',
-         'atr_z',
-         'macd_line',
-         'macd_z',
-         'ma_10',
-         'ma_100',
-         'vwap',
-         'vwap_std',
-         'upper_band_1',
-         'lower_band_1',
-         'upper_band_2',
-         'lower_band_2',
-         'upper_band_3',
-         'lower_band_3',
-         'touches_vwap',
-         'touches_upper_band_1',
-         'touches_upper_band_2',
-         'touches_upper_band_3',
-         'touches_lower_band_1',
-         'touches_lower_band_2',
-         'touches_lower_band_3',
-         'far_ratio_vwap',
-         'far_ratio_upper_band_1',
-         'far_ratio_upper_band_2',
-         'far_ratio_upper_band_3',
-         'far_ratio_lower_band_1',
-         'far_ratio_lower_band_2',
-         'far_ratio_lower_band_3',
-         'session',
-         'rsi',
-         'rsi_zone',
-         'ma_20',
-         'ma_30',
-         'ma_40',
-         'ma_60',
-         'bearish_stack',
-         'trend_strength_up',
-         'trend_strength_down',
-         'trend_direction',
-         'prev_volume',
-         'body_size',
-         'wick_up',
-         'wick_down',
-         'prev_body_size',
-         'prev_wick_up',
-         'prev_wick_down',
-         'rsi_bin',
-         'combo_key',
-         'is_bad_combo',
-         'combo_flag',
-         'macd_z_bin',
-         'combo_key2',
-         'combo_flag2',
-         'volume_bin',
-         'dollar_volume_bin',
-         'price_div_vol',
-         'rsi_div_macd',
-         'price_div_vwap',
-         'hour',
-         'month',
-         'dayofweek',
-         'is_weekend',
-         'hour_sin',
-         'hour_cos',
-         'dayofweek_sin',
-         'dayofweek_cos']
-
-        # 3️⃣ Keep only columns that exist in dataframe
-        shi_clean = [col for col in shi if col in available_cols]
-
-        # 4️⃣ Shift safely
-        x[shi_clean] = x[shi_clean].shift(1)
-        
-        logger.info(f"Successfully shifted {len(shi_clean)} features")
-        logger.debug(f"Shifted features: {shi_clean}")
-        
-        return x
-        
-    except Exception as e:
-        logger.error(f"Error in shift_features_after_generation: {str(e)}")
-        return x
-
-
-# USAGE EXAMPLE
-def complete_feature_generation_pipeline(df: pd.DataFrame, timeframe: str, signal_type: str) -> Optional[pd.DataFrame]:
-    """
-    Complete pipeline: generate features then shift them
-    
-    Args:
-        df: Input DataFrame with price data
-        timeframe: '15m' or '5m'
-        signal_type: 'BUY' or 'SELL'
-        
-    Returns:
-        DataFrame with generated and shifted features, or None if failed
-    """
-    try:
-        # Initialize feature engineer
-        feature_engineer = FeatureEngineer(timeframe)
-        
-        # Generate features for entire dataframe
-        features_list = []
-        for i in range(len(df)):
-            current_df = df.iloc[:i+1].copy() if i > 0 else df.iloc[:1].copy()
-            features = feature_engineer.generate_features(current_df, signal_type)
-            if features is not None:
-                features_list.append(features)
-        
-        if not features_list:
-            logger.error("No features generated")
-            return None
-        
-        # Create features DataFrame
-        features_df = pd.DataFrame(features_list)
-        features_df.index = df.index[:len(features_list)]
-        
-        # Apply shifting procedure
-        features_df = shift_features_after_generation(features_df)
-        
-        logger.info(f"Complete feature generation successful: {len(features_df)} rows, {len(features_df.columns)} features")
-        return features_df
-        
-    except Exception as e:
-        logger.error(f"Error in complete_feature_generation_pipeline: {str(e)}")
-        return None
-
-
-# SIMPLIFIED USAGE FOR SINGLE ROW
-def generate_single_row_features(df: pd.DataFrame, timeframe: str, signal_type: str) -> Optional[pd.Series]:
-    """
-    Generate features for single row (most recent candle)
-    
-    Args:
-        df: Input DataFrame with at least 200 rows
-        timeframe: '15m' or '5m'
-        signal_type: 'BUY' or 'SELL'
-        
-    Returns:
-        Series with features for single row
-    """
-    feature_engineer = FeatureEngineer(timeframe)
-    return feature_engineer.generate_features(df, signal_type)
-
-# ========================
-# ENHANCED MODEL LOADER WITH OVERCONFIDENCE DETECTION
-# ========================
-class ModelLoader:
-    def __init__(self, model_path, scaler_path):
-        logger.debug(f"Loading model from {model_path}")
-        logger.debug(f"Loading scaler from {scaler_path}")
-        try:
-            logger.debug("Loading TensorFlow model...")
-            self.model = tf.keras.models.load_model(model_path, compile=False)
-            logger.debug("Model loaded successfully")
-            
-            logger.debug("Loading Scikit-Learn scaler...")
-            self.scaler = joblib.load(scaler_path)
-            logger.debug("Scaler loaded successfully")
-            
-            # Track prediction statistics for overconfidence detection
-            self.prediction_history = []
-            self.overconfidence_threshold = 0.99
-            self.max_history_size = 100
-            
-        except Exception as e:
-            logger.error(f"Model loading failed: {str(e)}")
-            raise RuntimeError(f"Model loading failed: {str(e)}")
-    
-    
-        
-    def predict(self, features):
-        """Enhanced prediction with overconfidence detection"""
-        logger.debug("Starting prediction...")
-        
-        # Diagnostic: Check feature statistics
-        logger.debug(f"Feature stats - Min: {np.min(features):.4f}, Max: {np.max(features):.4f}, Mean: {np.mean(features):.4f}")
-        
-        scaled = self.scaler.transform([features])
-        logger.debug(f"Scaled stats - Min: {np.min(scaled):.4f}, Max: {np.max(scaled):.4f}, Mean: {np.mean(scaled):.4f}")
-        
-        reshaped = scaled.reshape(1, 1, -1)
-        prediction = self.model.predict(reshaped, verbose=0)[0][0]
-        
-            
-        logger.debug(f"Prediction complete: {prediction:.6f}")
-        return prediction
 
 # ========================
 # IMPROVED GOOGLE SHEETS STORAGE
@@ -1456,15 +1596,22 @@ class PredictionTracker:
             logger.info(f"Prediction stats - Mean: {np.mean(preds):.4f}, Std: {np.std(preds):.4f}, >0.99: {sum(p > 0.99 for p in preds)}")
 
 # ========================
-# COLAB TRADING BOT
+# ROBUST TRADING BOT WITH CIRCUIT BREAKERS
 # ========================
-class ColabTradingBot:
+class RobustColabTradingBot:
     def __init__(self, timeframe, credentials):
         self.timeframe = timeframe
         self.credentials = credentials
         self.logger = logging.getLogger(f"{timeframe}_bot")
         self.start_time = time.time()
         self.max_duration = 11.5 * 3600
+        
+        # Circuit breaker variables
+        self.consecutive_errors = 0
+        self.max_consecutive_errors = 5
+        self.circuit_breaker_tripped = False
+        self.last_successful_prediction = None
+        self.error_backoff_time = 60  # Start with 1 minute
         
         # Initialize Google Sheets storage
         self.storage = GoogleSheetsStorage(
@@ -1474,7 +1621,7 @@ class ColabTradingBot:
         # Initialize prediction tracker
         self.prediction_tracker = PredictionTracker()
         
-        logger.info(f"Initializing {timeframe} bot")
+        logger.info(f"Initializing robust {timeframe} bot")
         
         # Load model
         model_path = os.path.join(MODELS_DIR, "5mbilstm_model.keras" if timeframe == "M5" else "15mbilstm_model.keras")
@@ -1489,13 +1636,180 @@ class ColabTradingBot:
             logger.error(f"Scaler file not found: {scaler_path}")
             
         try:
-            self.model_loader = ModelLoader(model_path, scaler_path)
-            self.feature_engineer = FeatureEngineer(timeframe)
+            self.model_loader = RobustModelLoader(model_path, scaler_path)
+            self.feature_engineer = RobustFeatureEngineer(timeframe)
             self.data = pd.DataFrame()
-            logger.info(f"Bot initialized for {timeframe}")
+            logger.info(f"Robust bot initialized for {timeframe}")
         except Exception as e:
             logger.error(f"Bot initialization failed: {str(e)}")
             raise
+
+    def _preflight_check(self):
+        """Comprehensive preflight validation"""
+        try:
+            logger.info("Running preflight checks...")
+            
+            # Validate credentials
+            validate_credentials(self.credentials)
+            
+            # Test APIs
+            if not self.test_credentials():
+                raise CredentialsError("API credential test failed")
+            
+            # Test model
+            if not self.model_loader.health_check():
+                raise RuntimeError("Model health check failed")
+            
+            # Test feature engineering
+            test_df = pd.DataFrame({
+                'open': [1800.0] * 200,
+                'high': [1805.0] * 200,
+                'low': [1795.0] * 200,
+                'close': [1802.0] * 200,
+                'volume': [1000] * 200
+            })
+            test_features = self.feature_engineer.generate_features(test_df, 'BUY')
+            if test_features is None:
+                raise RuntimeError("Feature engineering test failed")
+            
+            logger.info("All preflight checks passed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Preflight check failed: {str(e)}")
+            self._send_alert(f"❌ {self.timeframe} bot preflight failed: {str(e)}")
+            return False
+
+    def _check_session_timeout(self, session_start):
+        """Check if session should timeout"""
+        elapsed = time.time() - session_start
+        
+        if elapsed > (self.max_duration - 1800) and not hasattr(self, 'timeout_sent'):
+            logger.warning("Session nearing timeout, sending warning")
+            self._send_alert(f"⏳ {self.timeframe} bot session will expire in 30 minutes")
+            self.timeout_sent = True
+            
+        if elapsed > self.max_duration:
+            logger.warning("Session timeout reached, exiting")
+            self._send_alert(f"🔴 {self.timeframe} bot session ended after 12 hours")
+            return True
+            
+        return False
+
+    def _sleep_until_candle(self, next_candle_time):
+        """Precise sleep until next candle"""
+        now = datetime.now(NY_TZ)
+        sleep_seconds = max(0, (next_candle_time - now).total_seconds() - 0.1)
+        
+        if sleep_seconds > 0:
+            logger.debug(f"Sleeping for {sleep_seconds:.2f}s until next candle")
+            time.sleep(sleep_seconds)
+        
+        # Busy-wait for precision
+        while datetime.now(NY_TZ) < next_candle_time:
+            time.sleep(0.001)
+        
+        logger.debug("Candle open detected")
+        time.sleep(5)  # Wait for candle to be available
+
+    def _fetch_and_validate_data(self):
+        """Fetch and validate candle data"""
+        try:
+            logger.debug("Fetching candle data...")
+            data = fetch_candles(
+                self.timeframe,
+                count=201,
+                api_key=self.credentials['oanda_api_key']
+            )
+            
+            if validate_dataframe(data, min_rows=50):
+                logger.debug(f"Data validated: {len(data)} rows")
+                return data
+            else:
+                return None
+                
+        except Exception as e:
+            logger.error(f"Data fetch/validation failed: {str(e)}")
+            return None
+
+    def _process_signals(self, data):
+        """Process signals with enhanced error handling"""
+        try:
+            # Detect signal
+            signal_type, signal_data = self.feature_engineer.calculate_crt_signal(data)
+            if not signal_type:
+                logger.debug("No signal detected")
+                return True  # Not an error
+            
+            logger.info(f"Signal detected: {signal_type}")
+            
+            # Generate features
+            features = self.feature_engineer.generate_features(data, signal_type)
+            if features is None:
+                logger.warning("Feature generation failed")
+                return False
+            
+            # Get prediction
+            prediction = self.model_loader.predict(features)
+            if prediction is None:
+                logger.warning("Prediction failed")
+                return False
+            
+            # Send signal
+            self.send_signal(signal_type, signal_data, prediction, features)
+            self.last_successful_prediction = time.time()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Signal processing failed: {str(e)}")
+            return False
+
+    def _handle_success(self):
+        """Handle successful iteration"""
+        self.consecutive_errors = 0
+        self.error_backoff_time = 60  # Reset backoff
+
+    def _handle_error(self, error_msg):
+        """Handle errors with circuit breaker logic"""
+        logger.error(error_msg)
+        self.consecutive_errors += 1
+        
+        # Trip circuit breaker if too many consecutive errors
+        if self.consecutive_errors >= self.max_consecutive_errors:
+            self.circuit_breaker_tripped = True
+            alert_msg = f"🚨 {self.timeframe} bot circuit breaker tripped after {self.consecutive_errors} errors"
+            self._send_alert(alert_msg)
+            return
+        
+        # Exponential backoff
+        backoff = min(self.error_backoff_time * (2 ** (self.consecutive_errors - 1)), 3600)  # Max 1 hour
+        logger.info(f"Error #{self.consecutive_errors}, backing off for {backoff}s")
+        time.sleep(backoff)
+
+    def _perform_health_check(self):
+        """Perform periodic health checks"""
+        try:
+            # Check model health every 10 minutes
+            if not hasattr(self, 'last_health_check') or time.time() - self.last_health_check > 600:
+                if not self.model_loader.health_check():
+                    logger.error("Model health check failed")
+                    self._send_alert(f"⚠️ {self.timeframe} bot model health check failed")
+                self.last_health_check = time.time()
+                
+        except Exception as e:
+            logger.error(f"Health check failed: {str(e)}")
+
+    def _send_alert(self, message):
+        """Send alert with error handling"""
+        try:
+            send_telegram(
+                message, 
+                self.credentials['telegram_token'], 
+                self.credentials['telegram_chat_id']
+            )
+        except Exception as e:
+            logger.error(f"Failed to send alert: {str(e)}")
 
     def calculate_next_candle_time(self):
         now = datetime.now(NY_TZ)
@@ -1589,13 +1903,18 @@ class ColabTradingBot:
         return telegram_ok and oanda_ok
 
     def run(self):
-        """Main bot execution loop with full context fetching"""
+        """Enhanced main loop with circuit breakers"""
         thread_name = threading.current_thread().name
-        logger.info(f"Starting bot thread: {thread_name}")
+        logger.info(f"Starting robust bot thread: {thread_name}")
+        
+        # Validate everything before starting
+        if not self._preflight_check():
+            logger.error("Preflight check failed, exiting bot")
+            return
         
         session_start = time.time()
         timeout_msg = f"⏳ {self.timeframe} bot session will expire in 30 minutes"
-        start_msg = f"🚀 {self.timeframe} bot started at {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
+        start_msg = f"🚀 {self.timeframe} robust bot started at {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
         
         # Test credentials before starting
         logger.info("Testing credentials...")
@@ -1608,162 +1927,177 @@ class ColabTradingBot:
         telegram_sent = send_telegram(start_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
         logger.info(f"Startup message {'sent' if telegram_sent else 'failed to send'}")
         
-        while True:
+        while not self.circuit_breaker_tripped:
             try:
-                # Check session time remaining
-                elapsed = time.time() - session_start
-                logger.debug(f"Session time elapsed: {elapsed/3600:.2f} hours")
-                
-                if elapsed > (self.max_duration - 1800) and not hasattr(self, 'timeout_sent'):
-                    logger.warning("Session nearing timeout, sending warning")
-                    send_telegram(timeout_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-                    self.timeout_sent = True
-                    
-                if elapsed > self.max_duration:
-                    logger.warning("Session timeout reached, exiting")
-                    end_msg = f"🔴 {self.timeframe} bot session ended after 12 hours"
-                    send_telegram(end_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+                # Check session timeout
+                if self._check_session_timeout(session_start):
                     return
                 
-                # Calculate precise wakeup time
-                now = datetime.now(NY_TZ)
-                next_candle = self.calculate_next_candle_time()
-                sleep_seconds = max(0, (next_candle - now).total_seconds() - 0.1)  # Wake 100ms early
+                # Wait for next candle
+                next_candle_time = self.calculate_next_candle_time()
+                self._sleep_until_candle(next_candle_time)
                 
-                if sleep_seconds > 0:
-                    logger.debug(f"Sleeping for {sleep_seconds:.2f} seconds until next candle")
-                    time.sleep(sleep_seconds)
-                
-                # Busy-wait for precise candle open
-                while datetime.now(NY_TZ) < next_candle:
-                    time.sleep(0.001)  # 1ms precision
-                
-                logger.debug("Candle open detected - waiting 5s for candle availability")
-                time.sleep(5)
-                
-                # Fetch full 201 candles for complete context
-                logger.debug("Fetching full 201 candles for updated context")
-                new_data = fetch_candles(
-                    self.timeframe,
-                    count=201,
-                    api_key=self.credentials['oanda_api_key']
-                )
-                
-                if new_data.empty:
-                    logger.error("Failed to fetch candle data")
+                # Fetch and validate data
+                data = self._fetch_and_validate_data()
+                if data is None:
+                    self._handle_error("Data fetch failed")
                     continue
-                    
-                # Update the data
-                self.data = new_data
-                logger.debug(f"Total records: {len(self.data)}")
                 
-                # Detect CRT pattern using only current open
-                signal_type, signal_data = self.feature_engineer.calculate_crt_signal(self.data)
+                # Process signals
+                success = self._process_signals(data)
+                if success:
+                    self._handle_success()
+                else:
+                    self._handle_error("Signal processing failed")
                 
-                if not signal_type:
-                    logger.debug("No CRT pattern detected")
-                    continue
-                    
-                logger.info(f"CRT pattern detected: {signal_type} at {signal_data['time']}")
+                # Health check
+                self._perform_health_check()
                 
-                # Generate features immediately
-                features = self.feature_engineer.generate_features(self.data, signal_type)
-                if features is None:
-                    logger.warning("Feature generation failed")
-                    continue
-                    
-                # Get prediction
-                prediction = self.model_loader.predict(features)
-                logger.info(f"Prediction: {prediction:.4f}")
-                
-                # Send signal and journal immediately
-                self.send_signal(signal_type, signal_data, prediction, features)
-                    
             except Exception as e:
-                error_msg = f"❌ {self.timeframe} bot error: {str(e)}"
-                logger.error(error_msg, exc_info=True)
-                send_telegram(error_msg[:1000], self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-                time.sleep(60)
+                self._handle_error(f"Unexpected error in main loop: {str(e)}")
 
 # ========================
-# MAIN EXECUTION
+# HEALTH MONITOR
 # ========================
+def monitor_bot_health(bots):
+    """Monitor bot health and restart if necessary"""
+    while True:
+        try:
+            for i, (bot, thread) in enumerate(bots):
+                if not thread.is_alive():
+                    logger.error(f"Bot {bot.timeframe} died, restarting...")
+                    
+                    # Restart bot
+                    new_bot = RobustColabTradingBot(bot.timeframe, bot.credentials)
+                    new_thread = threading.Thread(
+                        target=new_bot.run, 
+                        name=f"{bot.timeframe}_Bot_Restarted"
+                    )
+                    new_thread.daemon = True
+                    new_thread.start()
+                    
+                    bots[i] = (new_bot, new_thread)
+                    logger.info(f"Bot {bot.timeframe} restarted")
+            
+            time.sleep(30)  # Check every 30 seconds
+            
+        except Exception as e:
+            logger.error(f"Health monitor error: {str(e)}")
+            time.sleep(60)
+
+# ========================
+# ROBUST MAIN EXECUTION
+# ========================
+def setup_robust_logging():
+    """Setup comprehensive logging"""
+    log_format = '%(asctime)s [%(levelname)s] [%(threadName)s] [%(filename)s:%(lineno)d] %(message)s'
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler('trading_bot_robust.log'),
+            logging.FileHandler('trading_bot_errors.log', level=logging.ERROR)
+        ]
+    )
+    
+    # Suppress noisy loggers
+    for logger_name in ['tensorflow', 'ngrok', 'numba', 'httpx', 'httpcore']:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+    
+    return logging.getLogger(__name__)
+
 if __name__ == "__main__":
-    print("===== UPDATED BOT STARTING =====")
+    print("===== ROBUST BOT STARTING =====")
     print(f"Start time: {datetime.now(NY_TZ)}")
     print("Python version:", sys.version)
     print("TensorFlow version:", tf.__version__)
     print("Pandas version:", pd.__version__)
-    #print("Pandas_ta version:", ta.__version__)
     
-    # Force debug logging to console
-    debug_handler = logging.StreamHandler()
-    debug_handler.setLevel(logging.DEBUG)
-    debug_handler.setFormatter(logging.Formatter(log_format))
-    logging.getLogger().addHandler(debug_handler)
-    
-    logger.info("Starting main execution with updated version-compatible code")
+    # Setup robust logging
+    logger = setup_robust_logging()
     
     try:
-        logger = setup_colab()
-    except Exception as e:
-        logger.error(f"Colab setup failed: {str(e)}")
-    
-    # Load credentials
-    credentials = {
-        'telegram_token': os.getenv("TELEGRAM_BOT_TOKEN"),
-        'telegram_chat_id': os.getenv("TELEGRAM_CHAT_ID"),
-        'oanda_account_id': os.getenv("OANDA_ACCOUNT_ID"),
-        'oanda_api_key': os.getenv("OANDA_API_KEY")
-    }
-    
-    # Log credentials status (without values)
-    logger.info("Checking credentials...")
-    credentials_status = {k: "SET" if v else "MISSING" for k, v in credentials.items()}
-    for k, status in credentials_status.items():
-        logger.info(f"{k}: {status}")
-    
-    if not all(credentials.values()):
-        logger.error("Missing one or more credentials in environment variables")
-        # Send alert if Telegram credentials are available
-        if credentials['telegram_token'] and credentials['telegram_chat_id']:
-            send_telegram("❌ Bot failed to start: Missing credentials", 
-                         credentials['telegram_token'], credentials['telegram_chat_id'])
-        sys.exit(1)
-    
-    logger.info("All credentials present")
-    
-    try:
+        # Load and validate credentials
+        credentials = {
+            'telegram_token': os.getenv("TELEGRAM_BOT_TOKEN"),
+            'telegram_chat_id': os.getenv("TELEGRAM_CHAT_ID"),
+            'oanda_account_id': os.getenv("OANDA_ACCOUNT_ID"),
+            'oanda_api_key': os.getenv("OANDA_API_KEY")
+        }
+        
+        validate_credentials(credentials)
+        logger.info("Credentials validated successfully")
+        
+        # Create robust bots
+        bots = []
+        threads = []
+        
+        for timeframe in ["M5", "M15"]:
+            try:
+                logger.info(f"Creating {timeframe} robust bot")
+                bot = RobustColabTradingBot(timeframe, credentials)
+                thread = threading.Thread(target=bot.run, name=f"{timeframe}_Robust_Bot")
+                thread.daemon = True
+                
+                bots.append(bot)
+                threads.append(thread)
+                
+            except Exception as e:
+                logger.error(f"Failed to create {timeframe} bot: {str(e)}")
+                continue
+        
+        if not bots:
+            raise RuntimeError("No bots created successfully")
+        
         # Start bots
-        logger.info("Creating M5 bot")
-        bot_5m = ColabTradingBot("M5", credentials)
-        logger.info("Creating M15 bot")
-        bot_15m = ColabTradingBot("M15", credentials)
+        for thread in threads:
+            thread.start()
+            logger.info(f"Started thread: {thread.name}")
         
-        # Run in separate threads
-        logger.info("Starting bot threads")
-        t1 = threading.Thread(target=bot_5m.run, name="M5_Bot")
-        t2 = threading.Thread(target=bot_15m.run, name="M15_Bot")
+        # Start health monitor
+        health_thread = threading.Thread(
+            target=monitor_bot_health, 
+            args=(list(zip(bots, threads)),),
+            name="Health_Monitor"
+        )
+        health_thread.daemon = True
+        health_thread.start()
         
-        t1.daemon = True
-        t2.daemon = True
-        
-        t1.start()
-        logger.info("M5 bot thread started")
-        t2.start()
-        logger.info("M15 bot thread started")
-        
-        # Keep main thread alive with status updates
+        # Main monitoring loop
         logger.info("Main thread entering monitoring loop")
         while True:
-            logger.info(f"Bot status: M5 {'alive' if t1.is_alive() else 'dead'}, "
-                       f"M15 {'alive' if t2.is_alive() else 'dead'}")
+            status = []
+            for bot, thread in zip(bots, threads):
+                status.append(f"{bot.timeframe}: {'ALIVE' if thread.is_alive() else 'DEAD'}")
+            
+            logger.info(f"Bot status: {', '.join(status)}")
+            
+            # Log memory usage
+            try:
+                process = psutil.Process(os.getpid())
+                memory_mb = process.memory_info().rss / 1024 / 1024
+                logger.debug(f"Memory usage: {memory_mb:.1f} MB")
+            except:
+                pass
+            
             time.sleep(60)
             
+    except KeyboardInterrupt:
+        logger.info("Received interrupt signal, shutting down...")
     except Exception as e:
         logger.error(f"Main execution failed: {str(e)}", exc_info=True)
-        # Attempt to send error via Telegram if credentials are available
-        if credentials.get('telegram_token') and credentials.get('telegram_chat_id'):
-            send_telegram(f"❌ Bot crashed: {str(e)[:500]}", 
-                         credentials['telegram_token'], credentials['telegram_chat_id'])
+        
+        # Send final alert if possible
+        if 'credentials' in locals():
+            try:
+                send_telegram(
+                    f"❌ Robust bot system crashed: {str(e)[:500]}",
+                    credentials['telegram_token'],
+                    credentials['telegram_chat_id']
+                )
+            except:
+                pass
+        
         sys.exit(1)
