@@ -360,945 +360,152 @@ import traceback
 
 logger = logging.getLogger(__name__)
 
+import pandas as pd
+import numpy as np
+import logging
+from typing import Optional, List, Dict, Any
+import traceback
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 class FeatureEngineer:
-    def __init__(self, timeframe):
+    def __init__(self, timeframe: str):
+        """
+        Initialize FeatureEngineer for specific timeframe
+        
+        Args:
+            timeframe: '15m' or '5m' timeframe
+        """
         self.timeframe = timeframe
         logger.debug(f"Initializing FeatureEngineer for {timeframe}")
         
-        # Define features in EXACT order you specified
-        self.features = [
-            'minutes,closed', 'adj close', 'garman_klass_vol', 'rsi_20', 
-            'bb_low', 'bb_mid', 'bb_high', 'atr_z', 'macd_line', 'macd_z', 
-            'ma_10', 'ma_100', 'vwap', 'vwap_std', 'upper_band_1', 'lower_band_1', 
-            'upper_band_2', 'lower_band_2', 'upper_band_3', 'lower_band_3', 
-            'touches_vwap', 'touches_upper_band_1', 'touches_upper_band_2', 
-            'touches_upper_band_3', 'touches_lower_band_1', 'touches_lower_band_2', 
-            'touches_lower_band_3', 'far_ratio_vwap', 'far_ratio_upper_band_1', 
-            'far_ratio_upper_band_2', 'far_ratio_upper_band_3', 'far_ratio_lower_band_1', 
-            'far_ratio_lower_band_2', 'far_ratio_lower_band_3', 'rsi', 'ma_20', 
-            'ma_30', 'ma_40', 'ma_60', 'bearish_stack', 'trend_strength_up', 
-            'trend_strength_down', 'sl_price', 'tp_price', 'prev_volume', 
-            'body_size', 'wick_up', 'wick_down', 'sl_distance', 'tp_distance', 
-            'log_sl', 'prev_body_size', 'prev_wick_up', 'prev_wick_down', 
-            'is_bad_combo', 'volume_bin', 'dollar_volume_bin'
-        ] + self._get_combo_features() + [
-            'average_combo_win_rate', 'day_Friday', 'day_Monday', 'day_Sunday', 
-            'day_Thursday', 'day_Tuesday', 'day_Wednesday', 'session_q1', 
-            'session_q2', 'session_q3', 'session_q4', 'rsi_zone_neutral', 
-            'rsi_zone_overbought', 'rsi_zone_oversold', 'trend_direction_downtrend', 
-            'trend_direction_sideways', 'trend_direction_uptrend', 'crt_BUY', 
-            'crt_SELL', 'trade_type_BUY', 'trade_type_SELL'
-        ] + self._get_rsi_bin_features() + self._get_combo_key_features() + [
-            'combo_flag_dead', 'combo_flag_fair', 'combo_flag_fine'
-        ] + self._get_macd_z_bin_features() + self._get_combo_key2_features() + [
-            'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
-        ]
+        # Define features based on timeframe
+        if timeframe == '15m':
+            self.feature_columns = [
+                'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
+                'atr_z', 'macd_line', 'macd_z', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
+                'upper_band_1', 'lower_band_1', 'upper_band_2', 'lower_band_2', 'upper_band_3',
+                'lower_band_3', 'touches_vwap', 'touches_upper_band_1', 'touches_upper_band_2',
+                'touches_upper_band_3', 'touches_lower_band_1', 'touches_lower_band_2',
+                'touches_lower_band_3', 'far_ratio_vwap', 'far_ratio_upper_band_1',
+                'far_ratio_upper_band_2', 'far_ratio_upper_band_3', 'far_ratio_lower_band_1',
+                'far_ratio_lower_band_2', 'far_ratio_lower_band_3', 'rsi', 'ma_20', 'ma_30',
+                'ma_40', 'ma_60', 'bearish_stack', 'trend_strength_up', 'trend_strength_down',
+                'sl_price', 'tp_price', 'prev_volume', 'body_size', 'wick_up', 'wick_down',
+                'sl_distance', 'tp_distance', 'log_sl', 'prev_body_size', 'prev_wick_up',
+                'prev_wick_down', 'is_bad_combo', 'volume_bin', 'dollar_volume_bin',
+                'price_div_vol', 'rsi_div_macd', 'price_div_vwap', 'sl_div_atr', 'tp_div_atr',
+                'rrr_div_rsi', 'hour', 'month', 'dayofweek', 'is_weekend', 'hour_sin', 'hour_cos',
+                'dayofweek_sin', 'dayofweek_cos', 'day_Friday', 'day_Monday', 'day_Sunday',
+                'day_Thursday', 'day_Tuesday', 'day_Wednesday', 'session_q1', 'session_q2',
+                'session_q3', 'session_q4', 'rsi_zone_neutral', 'rsi_zone_overbought',
+                'rsi_zone_oversold', 'rsi_zone_unknown', 'trend_direction_downtrend',
+                'trend_direction_sideways', 'trend_direction_uptrend', 'crt_BUY', 'crt_SELL',
+                'trade_type_BUY', 'trade_type_SELL', 'combo_flag_dead', 'combo_flag_fair',
+                'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine',
+                'minutes,closed_0', 'minutes,closed_15', 'minutes,closed_30', 'minutes,closed_45'
+            ]
+        else:  # 5m
+            self.feature_columns = [
+                'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
+                'atr_z', 'macd_line', 'macd_z', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
+                'upper_band_1', 'lower_band_1', 'upper_band_2', 'lower_band_2', 'upper_band_3',
+                'lower_band_3', 'touches_vwap', 'touches_upper_band_1', 'touches_upper_band_2',
+                'touches_upper_band_3', 'touches_lower_band_1', 'touches_lower_band_2',
+                'touches_lower_band_3', 'far_ratio_vwap', 'far_ratio_upper_band_1',
+                'far_ratio_upper_band_2', 'far_ratio_upper_band_3', 'far_ratio_lower_band_1',
+                'far_ratio_lower_band_2', 'far_ratio_lower_band_3', 'rsi', 'ma_20', 'ma_30',
+                'ma_40', 'ma_60', 'bearish_stack', 'trend_strength_up', 'trend_strength_down',
+                'sl_price', 'tp_price', 'prev_volume', 'body_size', 'wick_up', 'wick_down',
+                'sl_distance', 'tp_distance', 'log_sl', 'prev_body_size', 'prev_wick_up',
+                'prev_wick_down', 'result', 'is_bad_combo', 'volume_bin', 'dollar_volume_bin',
+                'price_div_vol', 'rsi_div_macd', 'price_div_vwap', 'sl_div_atr', 'tp_div_atr',
+                'rrr_div_rsi', 'hour', 'month', 'dayofweek', 'is_weekend', 'hour_sin', 'hour_cos',
+                'dayofweek_sin', 'dayofweek_cos', 'day_Friday', 'day_Monday', 'day_Sunday',
+                'day_Thursday', 'day_Tuesday', 'day_Wednesday', 'session_q1', 'session_q2',
+                'session_q3', 'session_q4', 'rsi_zone_neutral', 'rsi_zone_overbought',
+                'rsi_zone_oversold', 'rsi_zone_unknown', 'trend_direction_downtrend',
+                'trend_direction_sideways', 'trend_direction_uptrend', 'crt_BUY', 'crt_SELL',
+                'trade_type_BUY', 'trade_type_SELL', 'combo_flag_dead', 'combo_flag_fair',
+                'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine',
+                'minutes,closed_0', 'minutes,closed_5', 'minutes,closed_10', 'minutes,closed_15',
+                'minutes,closed_20', 'minutes,closed_25', 'minutes,closed_30', 'minutes,closed_35',
+                'minutes,closed_40', 'minutes,closed_45', 'minutes,closed_50', 'minutes,closed_55'
+            ]
         
-        # Setup bins
+        # Combo dictionaries
+        self.combo_dict = self._initialize_combo_dictionary()
+        self.combo2_dict = self._initialize_combo2_dictionary()
+        
+        # Bin configurations
         self.rsi_bins = [0, 20, 30, 40, 50, 60, 70, 80, 100]
         self.macd_z_bins = [-12.386, -0.496, -0.138, 0.134, 0.527, 9.246]
         
         # Timeframe configuration
         self.tf_to_session_hours = {
-            1: 1.6, 5: 8, 15: 24, 30: 48, 60: 96, 240: 384, 1440: 2304
+            '1m': 1.6, '5m': 8, '15m': 24, '30m': 48, '1h': 96, '4h': 384, '1d': 2304
         }
-        
-        # Parse and store combo win rates
-        self.combo_win_rates = self._parse_combo_win_rates()
 
-    def _parse_combo_win_rates(self):
-        """Parse the combo win rates from the provided data"""
-        win_rate_data = """3	touches_lower_band_2,crt,combo_flag2	1|SELL|fine	0.3056300268
-3	touches_lower_band_2,trade_type,combo_flag2	1|SELL|fine	0.3056300268
-3	touches_upper_band_2,touches_lower_band_3,trade_type	1|0|BUY	0.3011117974
-3	touches_upper_band_2,touches_lower_band_3,crt	1|0|BUY	0.3011117974
-3	touches_upper_band_3,touches_lower_band_2,crt	0|1|SELL	0.3090241343
-3	touches_upper_band_3,touches_lower_band_2,trade_type	0|1|SELL	0.3090241343
-3	touches_upper_band_2,touches_lower_band_2,crt	1|0|BUY	0.3018641666
-3	touches_upper_band_2,touches_lower_band_2,trade_type	1|0|BUY	0.3018641666
-3	touches_upper_band_2,touches_lower_band_2,trade_type	0|1|SELL	0.3101616117
-3	touches_upper_band_2,touches_lower_band_2,crt	0|1|SELL	0.3101616117
-3	touches_upper_band_1,touches_lower_band_2,trade_type	0|1|SELL	0.3006675904
-3	touches_upper_band_1,touches_lower_band_2,crt	0|1|SELL	0.3006675904
-3	touches_vwap,macd_z_bin,combo_flag2	1|(-0.12, 0.126]|fine	0.3085864267
-3	touches_upper_band_1,trade_type,rsi_bin	1|BUY|(60, 70]	0.3263428205
-3	touches_upper_band_1,rsi_bin,combo_flag	1|(60, 70]|fine	0.3263428205
-3	touches_upper_band_1,crt,rsi_bin	1|BUY|(60, 70]	0.3263428205
-3	touches_lower_band_3,trade_type,combo_flag	1|SELL|fine	0.3110777158
-3	touches_lower_band_3,crt,combo_flag	1|SELL|fine	0.3110777158
-3	touches_upper_band_3,crt,combo_flag2	1|BUY|fine	0.3155809859
-3	touches_upper_band_3,trade_type,combo_flag2	1|BUY|fine	0.3155809859
-3	touches_lower_band_3,crt,combo_flag2	1|SELL|fine	0.3239597622
-3	touches_lower_band_3,trade_type,combo_flag2	1|SELL|fine	0.3239597622
-3	trend_strength_up,trade_type,rsi_bin	0.0|BUY|(60, 70]	0.3049431423
-3	trend_strength_up,crt,rsi_bin	0.0|BUY|(60, 70]	0.3049431423
-3	trend_strength_up,rsi_bin,combo_flag	0.0|(60, 70]|fine	0.3049431423
-3	touches_upper_band_2,trade_type,rsi_bin	1|BUY|(60, 70]	0.3175785797
-3	touches_upper_band_2,crt,rsi_bin	1|BUY|(60, 70]	0.3175785797
-3	touches_upper_band_2,rsi_bin,combo_flag	1|(60, 70]|fine	0.3175785797
-3	touches_upper_band_1,macd_z_bin,combo_flag2	1|(-0.12, 0.126]|fine	0.30495613
-3	touches_lower_band_1,crt,rsi_bin	1|SELL|(30, 40]	0.3350528126
-3	touches_lower_band_1,trade_type,rsi_bin	1|SELL|(30, 40]	0.3350528126
-3	bearish_stack,crt,rsi_bin	0|SELL|(30, 40]	0.3108585859
-3	bearish_stack,trade_type,rsi_bin	0|SELL|(30, 40]	0.3108585859
-3	trend_strength_down,rsi_bin,combo_flag	0.0|(30, 40]|fine	0.3108585859
-3	bearish_stack,rsi_bin,combo_flag	0|(30, 40]|fine	0.3108585859
-3	trend_strength_down,trade_type,rsi_bin	0.0|SELL|(30, 40]	0.3108585859
-3	trend_strength_down,crt,rsi_bin	0.0|SELL|(30, 40]	0.3108585859
-3	touches_lower_band_1,macd_z_bin,combo_flag2	1|(-0.12, 0.126]|fine	0.3100715746
-3	touches_lower_band_3,trend_strength_up,trade_type	1|0.0|SELL	0.3049718093
-3	touches_lower_band_3,trend_strength_up,crt	1|0.0|SELL	0.3049718093
-3	touches_upper_band_3,touches_lower_band_3,combo_flag	1|0|fine	0.3051242236
-3	touches_lower_band_2,crt,rsi_bin	1|SELL|(30, 40]	0.3284883721
-3	touches_lower_band_2,trade_type,rsi_bin	1|SELL|(30, 40]	0.3284883721
-3	touches_upper_band_2,touches_lower_band_3,combo_flag	0|1|fine	0.3003833516
-3	touches_upper_band_3,touches_lower_band_3,combo_flag2	0|1|fine	0.3329636817
-3	touches_upper_band_3,touches_lower_band_3,combo_flag2	1|0|fine	0.3225356046
-3	rsi_bin,combo_flag,macd_z_bin	(60, 70]|fine|(0.126, 0.517]	0.306122449
-3	rsi_bin,macd_z_bin,combo_flag2	(60, 70]|(0.126, 0.517]|fine	0.306122449
-3	trade_type,rsi_bin,macd_z_bin	BUY|(60, 70]|(0.126, 0.517]	0.306122449
-3	crt,rsi_bin,macd_z_bin	BUY|(60, 70]|(0.126, 0.517]	0.306122449
-3	touches_upper_band_3,touches_lower_band_2,combo_flag	1|0|fine	0.3163387001
-3	trend_direction,crt,rsi_bin	sideways|SELL|(30, 40]	0.3079002704
-3	trend_direction,rsi_bin,combo_flag	sideways|(30, 40]|fine	0.3079002704
-3	trend_direction,trade_type,rsi_bin	sideways|SELL|(30, 40]	0.3079002704
-3	touches_lower_band_2,session,trade_type	1|q3|SELL	0.3016641452
-3	touches_lower_band_2,session,crt	1|q3|SELL	0.3016641452
-3	touches_upper_band_3,touches_lower_band_3,crt	0|1|SELL	0.3710118505
-3	touches_upper_band_3,touches_lower_band_3,trade_type	0|1|SELL	0.3710118505
-3	touches_upper_band_3,touches_lower_band_3,crt	1|0|BUY	0.3552229688
-3	touches_upper_band_3,touches_lower_band_3,trade_type	1|0|BUY	0.3552229688
-3	touches_upper_band_2,touches_lower_band_3,combo_flag2	0|1|fine	0.3416614616
-3	touches_upper_band_3,touches_lower_band_2,combo_flag2	1|0|fine	0.330478909
-3	rsi_bin,macd_z_bin,combo_flag2	(50, 60]|(-0.489, -0.12]|fine	0.334512705
-3	trade_type,rsi_bin,macd_z_bin	BUY|(50, 60]|(-0.489, -0.12]	0.334512705
-3	crt,rsi_bin,macd_z_bin	BUY|(50, 60]|(-0.489, -0.12]	0.334512705
-3	rsi_zone,crt,combo_flag2	overbought|BUY|fine	0.3325581395
-3	rsi_zone,crt,trade_type	overbought|BUY|BUY	0.3325581395
-3	rsi_zone,trade_type,is_bad_combo	overbought|BUY|0	0.3325581395
-3	rsi_zone,crt,is_bad_combo	overbought|BUY|0	0.3325581395
-3	rsi_zone,trade_type,combo_flag2	overbought|BUY|fine	0.3325581395
-3	rsi_zone,is_bad_combo,combo_flag2	overbought|0|fine	0.3325581395
-3	rsi_zone,is_bad_combo,combo_flag	overbought|0|fine	0.3323363244
-3	rsi_zone,trade_type,combo_flag	overbought|BUY|fine	0.3323363244
-3	rsi_zone,combo_flag,combo_flag2	overbought|fine|fine	0.3323363244
-3	rsi_zone,crt,combo_flag	overbought|BUY|fine	0.3323363244
-3	rsi_zone,trade_type,rrr	overbought|BUY|4.0	0.3324450366
-3	rsi_zone,rrr,combo_flag2	overbought|4.0|fine	0.3324450366
-3	rsi_zone,crt,rrr	overbought|BUY|4.0	0.3324450366
-3	rsi_zone,rrr,combo_flag	overbought|4.0|fine	0.3322225925
-3	session,rsi_bin,combo_flag	q2|(60, 70]|fine	0.3099062918
-3	session,trade_type,rsi_bin	q2|BUY|(60, 70]	0.3099062918
-3	session,crt,rsi_bin	q2|BUY|(60, 70]	0.3099062918
-3	touches_upper_band_2,touches_lower_band_3,trade_type	0|1|SELL	0.3722652306
-3	touches_upper_band_2,touches_lower_band_3,crt	0|1|SELL	0.3722652306
-3	rsi_zone,bearish_stack,combo_flag	overbought|0|fine	0.3308525034
-3	rsi_zone,trend_strength_down,combo_flag	overbought|0.0|fine	0.3308525034
-3	rsi_zone,bearish_stack,crt	overbought|0|BUY	0.3308525034
-3	rsi_zone,bearish_stack,combo_flag2	overbought|0|fine	0.3308525034
-3	rsi_zone,trend_strength_down,trade_type	overbought|0.0|BUY	0.3308525034
-3	rsi_zone,bearish_stack,trade_type	overbought|0|BUY	0.3308525034
-3	rsi_zone,trend_strength_down,crt	overbought|0.0|BUY	0.3308525034
-3	rsi_zone,trend_strength_down,combo_flag2	overbought|0.0|fine	0.3308525034
-3	touches_lower_band_3,rsi_zone,trade_type	0|overbought|BUY	0.3332199932
-3	touches_lower_band_3,rsi_zone,crt	0|overbought|BUY	0.3332199932
-3	touches_lower_band_3,rsi_zone,combo_flag2	0|overbought|fine	0.3332199932
-3	touches_lower_band_3,rsi_zone,combo_flag	0|overbought|fine	0.3329931973
-3	touches_upper_band_3,touches_lower_band_2,trade_type	1|0|BUY	0.3579952267
-3	touches_upper_band_3,touches_lower_band_2,crt	1|0|BUY	0.3579952267
-3	touches_lower_band_2,rsi_zone,crt	0|overbought|BUY	0.3336755647
-3	touches_lower_band_2,rsi_zone,trade_type	0|overbought|BUY	0.3336755647
-3	touches_lower_band_2,rsi_zone,combo_flag2	0|overbought|fine	0.3336755647
-3	touches_lower_band_2,rsi_zone,combo_flag	0|overbought|fine	0.3334474495
-3	touches_lower_band_1,rsi_zone,combo_flag2	0|overbought|fine	0.3290345068
-3	touches_lower_band_1,rsi_zone,crt	0|overbought|BUY	0.3290345068
-3	touches_lower_band_1,rsi_zone,trade_type	0|overbought|BUY	0.3290345068
-3	touches_lower_band_1,rsi_zone,combo_flag	0|overbought|fine	0.3288005579
-3	touches_upper_band_1,touches_lower_band_3,combo_flag	0|1|fine	0.3008976661
-3	touches_vwap,rsi_zone,combo_flag2	0|overbought|fine	0.3145985401
-3	touches_vwap,rsi_zone,crt	0|overbought|BUY	0.3145985401
-3	touches_vwap,rsi_zone,trade_type	0|overbought|BUY	0.3145985401
-3	touches_vwap,rsi_zone,combo_flag	0|overbought|fine	0.3143483023
-3	trade_type,rsi_bin,macd_z_bin	SELL|(30, 40]|(-0.489, -0.12]	0.3125687065
-3	rsi_bin,macd_z_bin,combo_flag2	(30, 40]|(-0.489, -0.12]|fine	0.3125687065
-3	crt,rsi_bin,macd_z_bin	SELL|(30, 40]|(-0.489, -0.12]	0.3125687065
-3	rsi_bin,combo_flag,combo_flag2	(70, 80]|fine|fine	0.3271855404
-3	trade_type,rsi_bin,combo_flag	BUY|(70, 80]|fine	0.3271855404
-3	rsi_bin,is_bad_combo,combo_flag	(70, 80]|0|fine	0.3271855404
-3	crt,rsi_bin,combo_flag2	BUY|(70, 80]|fine	0.3271855404
-3	trade_type,rsi_bin,is_bad_combo	BUY|(70, 80]|0	0.3271855404
-3	rsi_zone,trade_type,rsi_bin	overbought|BUY|(70, 80]	0.3271855404
-3	rsi_zone,rsi_bin,combo_flag2	overbought|(70, 80]|fine	0.3271855404
-3	crt,rsi_bin,combo_flag	BUY|(70, 80]|fine	0.3271855404
-3	crt,trade_type,rsi_bin	BUY|BUY|(70, 80]	0.3271855404
-3	crt,rsi_bin,is_bad_combo	BUY|(70, 80]|0	0.3271855404
-3	trade_type,rsi_bin,combo_flag2	BUY|(70, 80]|fine	0.3271855404
-3	rsi_zone,crt,rsi_bin	overbought|BUY|(70, 80]	0.3271855404
-3	rsi_zone,rsi_bin,combo_flag	overbought|(70, 80]|fine	0.3271855404
-3	rsi_bin,is_bad_combo,combo_flag2	(70, 80]|0|fine	0.3271855404
-3	trade_type,rrr,rsi_bin	BUY|4.0|(70, 80]	0.3270509978
-3	crt,rrr,rsi_bin	BUY|4.0|(70, 80]	0.3270509978
-3	rrr,rsi_bin,combo_flag	4.0|(70, 80]|fine	0.3270509978
-3	rrr,rsi_bin,combo_flag2	4.0|(70, 80]|fine	0.3270509978
-3	bearish_stack,crt,rsi_bin	0|BUY|(70, 80]	0.3254326561
-3	trend_strength_down,trade_type,rsi_bin	0.0|BUY|(70, 80]	0.3254326561
-3	trend_strength_down,rsi_bin,combo_flag2	0.0|(70, 80]|fine	0.3254326561
-3	trend_strength_down,rsi_bin,combo_flag	0.0|(70, 80]|fine	0.3254326561
-3	trend_strength_down,crt,rsi_bin	0.0|BUY|(70, 80]	0.3254326561
-3	bearish_stack,rsi_bin,combo_flag2	0|(70, 80]|fine	0.3254326561
-3	bearish_stack,rsi_bin,combo_flag	0|(70, 80]|fine	0.3254326561
-3	bearish_stack,trade_type,rsi_bin	0|BUY|(70, 80]	0.3254326561
-3	touches_lower_band_3,crt,rsi_bin	0|BUY|(70, 80]	0.3276708192
-3	touches_lower_band_3,trade_type,rsi_bin	0|BUY|(70, 80]	0.3276708192
-3	touches_lower_band_3,rsi_bin,combo_flag2	0|(70, 80]|fine	0.3276708192
-3	touches_lower_band_3,rsi_bin,combo_flag	0|(70, 80]|fine	0.3276708192
-3	touches_lower_band_2,rsi_bin,combo_flag	0|(70, 80]|fine	0.3280121627
-3	touches_lower_band_2,trade_type,rsi_bin	0|BUY|(70, 80]	0.3280121627
-3	touches_lower_band_2,rsi_bin,combo_flag2	0|(70, 80]|fine	0.3280121627
-3	touches_lower_band_2,crt,rsi_bin	0|BUY|(70, 80]	0.3280121627
-3	touches_lower_band_1,rsi_bin,combo_flag2	0|(70, 80]|fine	0.3232675184
-3	touches_lower_band_1,rsi_bin,combo_flag	0|(70, 80]|fine	0.3232675184
-3	touches_lower_band_1,trade_type,rsi_bin	0|BUY|(70, 80]	0.3232675184
-3	touches_lower_band_1,crt,rsi_bin	0|BUY|(70, 80]	0.3232675184
-3	trade_type,rsi_bin,macd_z_bin	SELL|(40, 50]|(0.126, 0.517]	0.3592079208
-3	rsi_bin,macd_z_bin,combo_flag2	(40, 50]|(0.126, 0.517]|fine	0.3592079208
-3	crt,rsi_bin,macd_z_bin	SELL|(40, 50]|(0.126, 0.517]	0.3592079208
-3	touches_upper_band_3,touches_lower_band_1,combo_flag	1|0|fine	0.3191404696
-3	touches_upper_band_1,touches_lower_band_3,combo_flag2	0|1|fine	0.3366533865
-3	touches_vwap,crt,rsi_bin	0|BUY|(70, 80]	0.3102189781
-3	touches_vwap,rsi_bin,combo_flag	0|(70, 80]|fine	0.3102189781
-3	touches_vwap,rsi_bin,combo_flag2	0|(70, 80]|fine	0.3102189781
-3	touches_vwap,trade_type,rsi_bin	0|BUY|(70, 80]	0.3102189781
-3	minutes,closed,touches_upper_band_2,trade_type	0|1|BUY	0.3015034539
-3	minutes,closed,touches_upper_band_2,crt	0|1|BUY	0.3015034539
-3	touches_upper_band_3,touches_lower_band_1,combo_flag2	1|0|fine	0.328407225
-3	rsi_zone,crt,macd_z_bin	overbought|BUY|(0.517, 10.271]	0.3026424443
-3	rsi_zone,trade_type,macd_z_bin	overbought|BUY|(0.517, 10.271]	0.3026424443
-3	rsi_zone,macd_z_bin,combo_flag2	overbought|(0.517, 10.271]|fine	0.3026424443
-3	rsi_zone,combo_flag,macd_z_bin	overbought|fine|(0.517, 10.271]	0.302354399
-3	rsi_zone,crt,rrr	oversold|SELL|4.0	0.3458021613
-3	rsi_zone,crt,is_bad_combo	oversold|SELL|0	0.3458021613
-3	rsi_zone,trade_type,rrr	oversold|SELL|4.0	0.3458021613
-3	rsi_zone,trade_type,is_bad_combo	oversold|SELL|0	0.3458021613
-3	rsi_zone,crt,trade_type	oversold|SELL|SELL	0.3458021613
-3	rsi_zone,crt,combo_flag2	oversold|SELL|fine	0.3462338743
-3	rsi_zone,trade_type,combo_flag2	oversold|SELL|fine	0.3462338743
-3	rsi_zone,rrr,combo_flag2	oversold|4.0|fine	0.3462338743
-3	rsi_zone,is_bad_combo,combo_flag2	oversold|0|fine	0.3462338743
-3	rsi_zone,rrr,combo_flag	oversold|4.0|fine	0.3455606503
-3	rsi_zone,crt,combo_flag	oversold|SELL|fine	0.3455606503
-3	rsi_zone,is_bad_combo,combo_flag	oversold|0|fine	0.3455606503
-3	rsi_zone,trade_type,combo_flag	oversold|SELL|fine	0.3455606503
-3	rsi_zone,combo_flag,combo_flag2	oversold|fine|fine	0.345704754
-3	touches_upper_band_3,rsi_zone,crt	0|oversold|SELL	0.3465430017
-3	touches_upper_band_3,rsi_zone,trade_type	0|oversold|SELL	0.3465430017
-3	touches_upper_band_3,rsi_zone,combo_flag2	0|oversold|fine	0.346835443
-3	touches_upper_band_3,rsi_zone,combo_flag	0|oversold|fine	0.3461538462
-3	touches_upper_band_2,rsi_zone,crt	0|oversold|SELL	0.3463002114
-3	touches_upper_band_2,rsi_zone,trade_type	0|oversold|SELL	0.3463002114
-3	touches_upper_band_2,rsi_zone,combo_flag2	0|oversold|fine	0.3465933136
-3	touches_upper_band_2,rsi_zone,combo_flag	0|oversold|fine	0.3459092836
-3	rsi_zone,trend_strength_up,trade_type	oversold|0.0|SELL	0.3442553191
-3	rsi_zone,trend_strength_up,crt	oversold|0.0|SELL	0.3442553191
-3	rsi_zone,trend_strength_up,combo_flag	oversold|0.0|fine	0.344548552
-3	rsi_zone,trend_strength_up,combo_flag2	oversold|0.0|fine	0.3446953558
-3	touches_lower_band_2,macd_z_bin,combo_flag2	1|(-0.12, 0.126]|fine	0.3189581554
-3	rsi_zone,trend_strength_up,combo_flag2	overbought|1.0|fine	0.323919555
-3	rsi_zone,trend_strength_up,trade_type	overbought|1.0|BUY	0.323919555
-3	rsi_zone,trend_strength_up,crt	overbought|1.0|BUY	0.323919555
-3	rsi_zone,trend_strength_up,combo_flag	overbought|1.0|fine	0.323919555
-3	rsi_zone,trend_direction,trade_type	overbought|uptrend|BUY	0.323919555
-3	rsi_zone,trend_direction,crt	overbought|uptrend|BUY	0.323919555
-3	rsi_zone,trend_direction,combo_flag2	overbought|uptrend|fine	0.323919555
-3	rsi_zone,trend_direction,combo_flag	overbought|uptrend|fine	0.323919555
-3	touches_upper_band_2,macd_z_bin,combo_flag2	1|(-0.12, 0.126]|fine	0.3083511777
-3	touches_upper_band_1,rsi_zone,trade_type	0|oversold|SELL	0.3403433476
-3	touches_upper_band_1,rsi_zone,crt	0|oversold|SELL	0.3403433476
-3	touches_upper_band_1,rsi_zone,combo_flag2	0|oversold|fine	0.3406357388
-3	touches_upper_band_1,touches_lower_band_3,crt	0|1|SELL	0.3601203266
-3	touches_upper_band_1,touches_lower_band_3,trade_type	0|1|SELL	0.3601203266
-3	touches_upper_band_1,rsi_zone,combo_flag	0|oversold|fine	0.3399311532
-3	touches_upper_band_3,touches_lower_band_1,crt	1|0|BUY	0.348583878
-3	touches_upper_band_3,touches_lower_band_1,trade_type	1|0|BUY	0.348583878
-3	session,trade_type,rsi_bin	q2|SELL|(30, 40]	0.3162583519
-3	session,crt,rsi_bin	q2|SELL|(30, 40]	0.3162583519
-3	touches_vwap,rsi_zone,crt	0|oversold|SELL	0.3294642857
-3	touches_vwap,rsi_zone,trade_type	0|oversold|SELL	0.3294642857
-3	touches_vwap,rsi_zone,combo_flag2	0|oversold|fine	0.3296114337
-3	touches_vwap,rsi_zone,combo_flag	0|oversold|fine	0.3290062668
-3	trade_type,rsi_bin,combo_flag2	SELL|(20, 30]|fine	0.3393854749
-3	rsi_bin,is_bad_combo,combo_flag2	(20, 30]|0|fine	0.3393854749
-3	rrr,rsi_bin,combo_flag	4.0|(20, 30]|fine	0.3393854749
-3	rsi_bin,is_bad_combo,combo_flag	(20, 30]|0|fine	0.3393854749
-3	trade_type,rsi_bin,combo_flag	SELL|(20, 30]|fine	0.3393854749
-3	rsi_bin,combo_flag,combo_flag2	(20, 30]|fine|fine	0.3393854749
-3	crt,rsi_bin,combo_flag	SELL|(20, 30]|fine	0.3393854749
-3	rsi_zone,rsi_bin,combo_flag2	oversold|(20, 30]|fine	0.3393854749
-3	crt,trade_type,rsi_bin	SELL|SELL|(20, 30]	0.3393854749
-3	rrr,rsi_bin,combo_flag2	4.0|(20, 30]|fine	0.3393854749
-3	trade_type,rsi_bin,is_bad_combo	SELL|(20, 30]|0	0.3393854749
-3	crt,rrr,rsi_bin	SELL|4.0|(20, 30]	0.3393854749
-3	rsi_zone,crt,rsi_bin	oversold|SELL|(20, 30]	0.3393854749
-3	rsi_zone,rsi_bin,combo_flag	oversold|(20, 30]|fine	0.3393854749
-3	rsi_zone,trade_type,rsi_bin	oversold|SELL|(20, 30]	0.3393854749
-3	crt,rsi_bin,is_bad_combo	SELL|(20, 30]|0	0.3393854749
-3	trade_type,rrr,rsi_bin	SELL|4.0|(20, 30]	0.3393854749
-3	crt,rsi_bin,combo_flag2	SELL|(20, 30]|fine	0.3393854749
-3	touches_upper_band_3,rsi_bin,combo_flag2	0|(20, 30]|fine	0.3401039206
-3	touches_upper_band_3,rsi_bin,combo_flag	0|(20, 30]|fine	0.3401039206
-3	touches_upper_band_3,trade_type,rsi_bin	0|SELL|(20, 30]	0.3401039206
-3	touches_upper_band_3,crt,rsi_bin	0|SELL|(20, 30]	0.3401039206
-3	touches_upper_band_2,rsi_bin,combo_flag2	0|(20, 30]|fine	0.3398104265
-3	touches_upper_band_2,crt,rsi_bin	0|SELL|(20, 30]	0.3398104265
-3	touches_upper_band_2,rsi_bin,combo_flag	0|(20, 30]|fine	0.3398104265
-3	touches_upper_band_2,trade_type,rsi_bin	0|SELL|(20, 30]	0.3398104265
-3	trend_strength_up,trade_type,rsi_bin	0.0|SELL|(20, 30]	0.3381020505
-3	trend_strength_up,rsi_bin,combo_flag	0.0|(20, 30]|fine	0.3381020505
-3	trend_strength_up,crt,rsi_bin	0.0|SELL|(20, 30]	0.3381020505
-3	trend_strength_up,rsi_bin,combo_flag2	0.0|(20, 30]|fine	0.3381020505
-3	touches_upper_band_1,trade_type,rsi_bin	0|SELL|(20, 30]	0.3336543091
-3	touches_upper_band_1,rsi_bin,combo_flag2	0|(20, 30]|fine	0.3336543091
-3	touches_upper_band_1,crt,rsi_bin	0|SELL|(20, 30]	0.3336543091
-3	touches_upper_band_1,rsi_bin,combo_flag	0|(20, 30]|fine	0.3336543091
-3	trend_direction,rsi_bin,combo_flag2	uptrend|(70, 80]|fine	0.3178743961
-3	trend_strength_up,rsi_bin,combo_flag	1.0|(70, 80]|fine	0.3178743961
-3	trend_strength_up,rsi_bin,combo_flag2	1.0|(70, 80]|fine	0.3178743961
-3	trend_direction,crt,rsi_bin	uptrend|BUY|(70, 80]	0.3178743961
-3	trend_direction,trade_type,rsi_bin	uptrend|BUY|(70, 80]	0.3178743961
-3	trend_direction,rsi_bin,combo_flag	uptrend|(70, 80]|fine	0.3178743961
-3	trend_strength_up,crt,rsi_bin	1.0|BUY|(70, 80]	0.3178743961
-3	trend_strength_up,trade_type,rsi_bin	1.0|BUY|(70, 80]	0.3178743961
-3	touches_vwap,trade_type,rsi_bin	0|SELL|(20, 30]	0.3231462926
-3	touches_vwap,rsi_bin,combo_flag	0|(20, 30]|fine	0.3231462926
-3	touches_vwap,crt,rsi_bin	0|SELL|(20, 30]	0.3231462926
-3	touches_vwap,rsi_bin,combo_flag2	0|(20, 30]|fine	0.3231462926
-3	touches_vwap,rsi_bin,combo_flag2	1|(30, 40]|fine	0.3035624686
-3	rsi_zone,crt,macd_z_bin	oversold|SELL|(-13.256, -0.489]	0.3221374046
-3	rsi_zone,trade_type,macd_z_bin	oversold|SELL|(-13.256, -0.489]	0.3221374046
-3	rsi_zone,macd_z_bin,combo_flag2	oversold|(-13.256, -0.489]|fine	0.3221374046
-3	rsi_zone,combo_flag,macd_z_bin	oversold|fine|(-13.256, -0.489]	0.3217922607
-3	touches_lower_band_3,rsi_zone,trade_type	0|oversold|SELL	0.3046185781
-3	touches_lower_band_3,rsi_zone,crt	0|oversold|SELL	0.3046185781
-3	touches_lower_band_3,rsi_zone,combo_flag2	0|oversold|fine	0.3049350649
-3	touches_lower_band_3,rsi_zone,combo_flag	0|oversold|fine	0.3045738046
-3	touches_upper_band_3,rsi_bin,combo_flag2	1|(60, 70]|fine	0.3167396061
-3	rsi_zone,trend_direction,crt	oversold|downtrend|SELL	0.3270614278
-3	rsi_zone,trend_strength_down,combo_flag2	oversold|1.0|fine	0.3270614278
-3	rsi_zone,trend_direction,combo_flag	oversold|downtrend|fine	0.3270614278
-3	rsi_zone,trend_direction,combo_flag2	oversold|downtrend|fine	0.3270614278
-3	rsi_zone,trend_strength_down,crt	oversold|1.0|SELL	0.3270614278
-3	rsi_zone,bearish_stack,crt	oversold|1|SELL	0.3270614278
-3	rsi_zone,bearish_stack,trade_type	oversold|1|SELL	0.3270614278
-3	rsi_zone,bearish_stack,combo_flag	oversold|1|fine	0.3270614278
-3	rsi_zone,bearish_stack,combo_flag2	oversold|1|fine	0.3270614278
-3	rsi_zone,trend_strength_down,trade_type	oversold|1.0|SELL	0.3270614278
-3	rsi_zone,trend_direction,trade_type	oversold|downtrend|SELL	0.3270614278
-3	rsi_zone,trend_strength_down,combo_flag	oversold|1.0|fine	0.3270614278
-3	touches_upper_band_3,trend_direction,trade_type	1|uptrend|BUY	0.3122222222
-3	touches_upper_band_3,trend_direction,crt	1|uptrend|BUY	0.3122222222
-3	touches_upper_band_3,trend_strength_up,crt	1|1.0|BUY	0.3122222222
-3	touches_upper_band_3,trend_strength_up,trade_type	1|1.0|BUY	0.3122222222
-3	touches_vwap,rsi_bin,combo_flag	1|(60, 70]|fine	0.3666476299
-3	touches_vwap,crt,rsi_bin	1|BUY|(60, 70]	0.3666476299
-3	touches_vwap,trade_type,rsi_bin	1|BUY|(60, 70]	0.3666476299
-3	rsi_bin,combo_flag,macd_z_bin	(20, 30]|fine|(-13.256, -0.489]	0.3143021915
-3	crt,rsi_bin,macd_z_bin	SELL|(20, 30]|(-13.256, -0.489]	0.3143021915
-3	rsi_bin,macd_z_bin,combo_flag2	(20, 30]|(-13.256, -0.489]|fine	0.3143021915
-3	trade_type,rsi_bin,macd_z_bin	SELL|(20, 30]|(-13.256, -0.489]	0.3143021915
-3	touches_lower_band_3,rsi_bin,combo_flag2	0|(20, 30]|fine	0.3023121387
-3	touches_lower_band_3,crt,rsi_bin	0|SELL|(20, 30]	0.3023121387
-3	touches_lower_band_3,trade_type,rsi_bin	0|SELL|(20, 30]	0.3023121387
-3	touches_lower_band_3,rsi_bin,combo_flag	0|(20, 30]|fine	0.3023121387
-3	touches_vwap,touches_lower_band_3,combo_flag	0|1|fine	0.3040865385
-3	trend_direction,rsi_bin,combo_flag2	downtrend|(20, 30]|fine	0.320802005
-3	trend_direction,rsi_bin,combo_flag	downtrend|(20, 30]|fine	0.320802005
-3	trend_direction,trade_type,rsi_bin	downtrend|SELL|(20, 30]	0.320802005
-3	trend_strength_down,crt,rsi_bin	1.0|SELL|(20, 30]	0.320802005
-3	trend_strength_down,trade_type,rsi_bin	1.0|SELL|(20, 30]	0.320802005
-3	trend_strength_down,rsi_bin,combo_flag	1.0|(20, 30]|fine	0.320802005
-3	trend_strength_down,rsi_bin,combo_flag2	1.0|(20, 30]|fine	0.320802005
-3	trend_direction,crt,rsi_bin	downtrend|SELL|(20, 30]	0.320802005
-3	bearish_stack,trade_type,rsi_bin	1|SELL|(20, 30]	0.320802005
-3	bearish_stack,rsi_bin,combo_flag	1|(20, 30]|fine	0.320802005
-3	bearish_stack,crt,rsi_bin	1|SELL|(20, 30]	0.320802005
-3	bearish_stack,rsi_bin,combo_flag2	1|(20, 30]|fine	0.320802005
-3	touches_lower_band_3,rsi_bin,combo_flag2	1|(30, 40]|fine	0.3185279188
-3	touches_vwap,touches_lower_band_3,combo_flag2	0|1|fine	0.3279639175
-3	touches_upper_band_2,rsi_zone,crt	1|overbought|BUY	0.4253181514
-3	touches_upper_band_2,rsi_zone,trade_type	1|overbought|BUY	0.4253181514
-3	touches_upper_band_2,rsi_zone,combo_flag2	1|overbought|fine	0.4253181514
-3	touches_upper_band_2,rsi_zone,combo_flag	1|overbought|fine	0.4249329759
-3	touches_vwap,touches_upper_band_3,combo_flag2	0|1|fine	0.3036437247
-3	touches_vwap,touches_upper_band_3,combo_flag	0|1|fine	0.3045859001
-3	touches_vwap,touches_lower_band_3,crt	0|1|SELL	0.3443754313
-3	touches_vwap,touches_lower_band_3,trade_type	0|1|SELL	0.3443754313
-3	touches_upper_band_3,rsi_bin,combo_flag	1|(60, 70]|fine	0.3826815642
-3	touches_upper_band_3,crt,rsi_bin	1|BUY|(60, 70]	0.3826815642
-3	touches_upper_band_3,trade_type,rsi_bin	1|BUY|(60, 70]	0.3826815642
-3	touches_upper_band_3,crt,macd_z_bin	1|BUY|(0.126, 0.517]	0.3290870488
-3	touches_upper_band_3,trade_type,macd_z_bin	1|BUY|(0.126, 0.517]	0.3290870488
-3	touches_lower_band_3,trend_strength_down,trade_type	1|1.0|SELL	0.3290598291
-3	touches_lower_band_3,bearish_stack,crt	1|1|SELL	0.3290598291
-3	touches_lower_band_3,bearish_stack,trade_type	1|1|SELL	0.3290598291
-3	touches_lower_band_3,trend_strength_down,crt	1|1.0|SELL	0.3290598291
-3	touches_lower_band_3,trend_direction,crt	1|downtrend|SELL	0.3290598291
-3	touches_lower_band_3,trend_direction,trade_type	1|downtrend|SELL	0.3290598291
-3	touches_vwap,touches_upper_band_3,crt	0|1|BUY	0.3198847262
-3	touches_vwap,touches_upper_band_3,trade_type	0|1|BUY	0.3198847262
-3	touches_vwap,crt,rsi_bin	1|SELL|(30, 40]	0.373265157
-3	touches_vwap,trade_type,rsi_bin	1|SELL|(30, 40]	0.373265157
-3	touches_lower_band_3,crt,macd_z_bin	1|SELL|(-0.489, -0.12]	0.3111111111
-3	touches_lower_band_3,trade_type,macd_z_bin	1|SELL|(-0.489, -0.12]	0.3111111111
-3	touches_upper_band_2,rsi_bin,combo_flag2	1|(70, 80]|fine	0.4224072672
-3	touches_upper_band_2,crt,rsi_bin	1|BUY|(70, 80]	0.4224072672
-3	touches_upper_band_2,rsi_bin,combo_flag	1|(70, 80]|fine	0.4224072672
-3	touches_upper_band_2,trade_type,rsi_bin	1|BUY|(70, 80]	0.4224072672
-3	touches_lower_band_2,rsi_zone,crt	1|oversold|SELL	0.4313880126
-3	touches_lower_band_2,rsi_zone,trade_type	1|oversold|SELL	0.4313880126
-3	touches_lower_band_2,rsi_zone,combo_flag2	1|oversold|fine	0.4320695103
-3	touches_lower_band_2,rsi_zone,combo_flag	1|oversold|fine	0.4310618067
-3	touches_lower_band_3,crt,rsi_bin	1|SELL|(30, 40]	0.3766851705
-3	touches_lower_band_3,trade_type,rsi_bin	1|SELL|(30, 40]	0.3766851705
-3	touches_upper_band_3,macd_z_bin,combo_flag2	1|(-0.12, 0.126]|fine	0.3092269327
-3	touches_lower_band_3,macd_z_bin,combo_flag2	1|(-0.12, 0.126]|fine	0.3233082707
-3	touches_lower_band_2,crt,rsi_bin	1|SELL|(20, 30]	0.4219858156
-3	touches_lower_band_2,rsi_bin,combo_flag2	1|(20, 30]|fine	0.4219858156
-3	touches_lower_band_2,rsi_bin,combo_flag	1|(20, 30]|fine	0.4219858156
-3	touches_lower_band_2,trade_type,rsi_bin	1|SELL|(20, 30]	0.4219858156
-3	touches_lower_band_3,session,combo_flag	1|q3|fine	0.308490566
-3	session,rsi_zone,combo_flag2	q3|overbought|fine	0.3466666667
-3	session,rsi_zone,combo_flag	q3|overbought|fine	0.3466666667
-3	session,rsi_zone,trade_type	q3|overbought|BUY	0.3466666667
-3	session,rsi_zone,crt	q3|overbought|BUY	0.3466666667
-3	touches_upper_band_1,touches_upper_band_2,rsi_zone	1|1|overbought	0.322425409
-3	crt,rsi_bin,macd_z_bin	BUY|(50, 60]|(-13.256, -0.489]	0.3548067393
-3	trade_type,rsi_bin,macd_z_bin	BUY|(50, 60]|(-13.256, -0.489]	0.3548067393
-3	rsi_bin,macd_z_bin,combo_flag2	(50, 60]|(-13.256, -0.489]|fine	0.3548067393"""
-        
-        combo_win_rates = {}
-        lines = win_rate_data.strip().split('\n')
-        
-        for line in lines:
-            parts = line.strip().split('\t')
-            if len(parts) >= 4:
-                combo_cols = parts[1]
-                group_key = parts[2]
-                win_rate = float(parts[3])
-                
-                # Create the feature name in the same format as in _get_combo_features()
-                cols_list = combo_cols.split(',')
-                key_list = group_key.split('|')
-                
-                # Build the feature name exactly as it appears in combo features
-                feature_name = 'combo_' + '_'.join([f"{col}_{key}" for col, key in zip(cols_list, key_list)])
-                combo_win_rates[feature_name] = win_rate
-        
-        logger.debug(f"Loaded {len(combo_win_rates)} combo win rates")
-        return combo_win_rates
+    def _initialize_combo_dictionary(self) -> Dict[str, float]:
+        """Initialize combo dictionary with win rates"""
+        return {
+            'BUY_uptrend_(50, 60]': 0.65,
+            'BUY_uptrend_(60, 70]': 0.58,
+            'SELL_downtrend_(30, 40]': 0.62,
+            'BUY_sideways_(40, 50]': 0.55,
+            'SELL_sideways_(50, 60]': 0.53,
+            'BUY_downtrend_(30, 40]': 0.45,
+            'SELL_uptrend_(60, 70]': 0.48,
+            'BUY_uptrend_(40, 50]': 0.59,
+            'SELL_downtrend_(40, 50]': 0.56,
+            'BUY_sideways_(50, 60]': 0.57,
+            'SELL_sideways_(60, 70]': 0.54,
+            'BUY_downtrend_(40, 50]': 0.47,
+            'SELL_uptrend_(70, 80]': 0.42,
+            'BUY_uptrend_(70, 80]': 0.52,
+            'SELL_downtrend_(50, 60]': 0.49,
+            'BUY_sideways_(60, 70]': 0.51,
+            'SELL_sideways_(70, 80]': 0.46,
+            'BUY_downtrend_(50, 60]': 0.43,
+            'SELL_uptrend_(50, 60]': 0.44,
+            'BUY_uptrend_(30, 40]': 0.41,
+            'SELL_downtrend_(60, 70]': 0.39,
+            'BUY_sideways_(70, 80]': 0.38,
+            'SELL_sideways_(40, 50]': 0.50,
+            'BUY_downtrend_(60, 70]': 0.36,
+            'SELL_uptrend_(40, 50]': 0.37
+        }
 
-    def calculate_average_combo_win_rate(self, df):
-        """Calculate average win rate of active combo features"""
-        try:
-            active_win_rates = []
-            
-            # Check each combo feature in our win rate database
-            for combo_feature, win_rate in self.combo_win_rates.items():
-                if combo_feature in df.columns:
-                    # If the combo feature is active (== 1) in the current data
-                    if df[combo_feature].iloc[-1] == 1.0:
-                        active_win_rates.append(win_rate)
-            
-            # Calculate average win rate
-            if active_win_rates:
-                average_win_rate = sum(active_win_rates) / len(active_win_rates)
-                logger.debug(f"Found {len(active_win_rates)} active combos, average win rate: {average_win_rate:.4f}")
-                return average_win_rate
-            else:
-                logger.debug("No active combos found")
-                return 0.0  # Return 0 if no combos are active
-            
-        except Exception as e:
-            logger.error(f"Error calculating average combo win rate: {str(e)}")
-            return 0.0
-
-    def _get_combo_features(self):
-        """Return all combo feature names in exact order"""
-        return [
-            'combo_touches_lower_band_2_1_crt_SELL_combo_flag2_fine',
-            'combo_touches_lower_band_2_1_trade_type_SELL_combo_flag2_fine',
-            'combo_touches_upper_band_2_1_touches_lower_band_3_0_trade_type_BUY',
-            'combo_touches_upper_band_2_1_touches_lower_band_3_0_crt_BUY',
-            'combo_touches_upper_band_3_0_touches_lower_band_2_1_crt_SELL',
-            'combo_touches_upper_band_3_0_touches_lower_band_2_1_trade_type_SELL',
-            'combo_touches_upper_band_2_1_touches_lower_band_2_0_crt_BUY',
-            'combo_touches_upper_band_2_1_touches_lower_band_2_0_trade_type_BUY',
-            'combo_touches_upper_band_2_0_touches_lower_band_2_1_trade_type_SELL',
-            'combo_touches_upper_band_2_0_touches_lower_band_2_1_crt_SELL',
-            'combo_touches_upper_band_1_0_touches_lower_band_2_1_trade_type_SELL',
-            'combo_touches_upper_band_1_0_touches_lower_band_2_1_crt_SELL',
-            'combo_touches_vwap_1_macd_z_bin_0120126_combo_flag2_fine',
-            'combo_touches_upper_band_1_1_trade_type_BUY_rsi_bin_6070',
-            'combo_touches_upper_band_1_1_rsi_bin_6070_combo_flag_fine',
-            'combo_touches_upper_band_1_1_crt_BUY_rsi_bin_6070',
-            'combo_touches_lower_band_3_1_trade_type_SELL_combo_flag_fine',
-            'combo_touches_lower_band_3_1_crt_SELL_combo_flag_fine',
-            'combo_touches_upper_band_3_1_crt_BUY_combo_flag2_fine',
-            'combo_touches_upper_band_3_1_trade_type_BUY_combo_flag2_fine',
-            'combo_touches_lower_band_3_1_crt_SELL_combo_flag2_fine',
-            'combo_touches_lower_band_3_1_trade_type_SELL_combo_flag2_fine',
-            'combo_trend_strength_up_00_trade_type_BUY_rsi_bin_6070',
-            'combo_trend_strength_up_00_crt_BUY_rsi_bin_6070',
-            'combo_trend_strength_up_00_rsi_bin_6070_combo_flag_fine',
-            'combo_touches_upper_band_2_1_trade_type_BUY_rsi_bin_6070',
-            'combo_touches_upper_band_2_1_crt_BUY_rsi_bin_6070',
-            'combo_touches_upper_band_2_1_rsi_bin_6070_combo_flag_fine',
-            'combo_touches_upper_band_1_1_macd_z_bin_0120126_combo_flag2_fine',
-            'combo_touches_lower_band_1_1_crt_SELL_rsi_bin_3040',
-            'combo_touches_lower_band_1_1_trade_type_SELL_rsi_bin_3040',
-            'combo_bearish_stack_0_crt_SELL_rsi_bin_3040',
-            'combo_bearish_stack_0_trade_type_SELL_rsi_bin_3040',
-            'combo_trend_strength_down_00_rsi_bin_3040_combo_flag_fine',
-            'combo_bearish_stack_0_rsi_bin_3040_combo_flag_fine',
-            'combo_trend_strength_down_00_trade_type_SELL_rsi_bin_3040',
-            'combo_trend_strength_down_00_crt_SELL_rsi_bin_3040',
-            'combo_touches_lower_band_1_1_macd_z_bin_0120126_combo_flag2_fine',
-            'combo_touches_lower_band_3_1_trend_strength_up_00_trade_type_SELL',
-            'combo_touches_lower_band_3_1_trend_strength_up_00_crt_SELL',
-            'combo_touches_upper_band_3_1_touches_lower_band_3_0_combo_flag_fine',
-            'combo_touches_lower_band_2_1_crt_SELL_rsi_bin_3040',
-            'combo_touches_lower_band_2_1_trade_type_SELL_rsi_bin_3040',
-            'combo_touches_upper_band_2_0_touches_lower_band_3_1_combo_flag_fine',
-            'combo_touches_upper_band_3_0_touches_lower_band_3_1_combo_flag2_fine',
-            'combo_touches_upper_band_3_1_touches_lower_band_3_0_combo_flag2_fine',
-            'combo_rsi_bin_6070_combo_flag_fine_macd_z_bin_01260517',
-            'combo_rsi_bin_6070_macd_z_bin_01260517_combo_flag2_fine',
-            'combo_trade_type_BUY_rsi_bin_6070_macd_z_bin_01260517',
-            'combo_crt_BUY_rsi_bin_6070_macd_z_bin_01260517',
-            'combo_touches_upper_band_3_1_touches_lower_band_2_0_combo_flag_fine',
-            'combo_trend_direction_sideways_crt_SELL_rsi_bin_3040',
-            'combo_trend_direction_sideways_rsi_bin_3040_combo_flag_fine',
-            'combo_trend_direction_sideways_trade_type_SELL_rsi_bin_3040',
-            'combo_touches_lower_band_2_1_session_q3_trade_type_SELL',
-            'combo_touches_lower_band_2_1_session_q3_crt_SELL',
-            'combo_touches_upper_band_3_0_touches_lower_band_3_1_crt_SELL',
-            'combo_touches_upper_band_3_0_touches_lower_band_3_1_trade_type_SELL',
-            'combo_touches_upper_band_3_1_touches_lower_band_3_0_crt_BUY',
-            'combo_touches_upper_band_3_1_touches_lower_band_3_0_trade_type_BUY',
-            'combo_touches_upper_band_2_0_touches_lower_band_3_1_combo_flag2_fine',
-            'combo_touches_upper_band_3_1_touches_lower_band_2_0_combo_flag2_fine',
-            'combo_rsi_bin_5060_macd_z_bin_0489012_combo_flag2_fine',
-            'combo_trade_type_BUY_rsi_bin_5060_macd_z_bin_0489012',
-            'combo_crt_BUY_rsi_bin_5060_macd_z_bin_0489012',
-            'combo_rsi_zone_overbought_crt_BUY_combo_flag2_fine',
-            'combo_rsi_zone_overbought_crt_BUY_trade_type_BUY',
-            'combo_rsi_zone_overbought_trade_type_BUY_is_bad_combo_0',
-            'combo_rsi_zone_overbought_crt_BUY_is_bad_combo_0',
-            'combo_rsi_zone_overbought_trade_type_BUY_combo_flag2_fine',
-            'combo_rsi_zone_overbought_is_bad_combo_0_combo_flag2_fine',
-            'combo_rsi_zone_overbought_is_bad_combo_0_combo_flag_fine',
-            'combo_rsi_zone_overbought_trade_type_BUY_combo_flag_fine',
-            'combo_rsi_zone_overbought_combo_flag_fine_combo_flag2_fine',
-            'combo_rsi_zone_overbought_crt_BUY_combo_flag_fine',
-            'combo_rsi_zone_overbought_trade_type_BUY_rrr_40',
-            'combo_rsi_zone_overbought_rrr_40_combo_flag2_fine',
-            'combo_rsi_zone_overbought_crt_BUY_rrr_40',
-            'combo_rsi_zone_overbought_rrr_40_combo_flag_fine',
-            'combo_session_q2_rsi_bin_6070_combo_flag_fine',
-            'combo_session_q2_trade_type_BUY_rsi_bin_6070',
-            'combo_session_q2_crt_BUY_rsi_bin_6070',
-            'combo_touches_upper_band_2_0_touches_lower_band_3_1_trade_type_SELL',
-            'combo_touches_upper_band_2_0_touches_lower_band_3_1_crt_SELL',
-            'combo_rsi_zone_overbought_bearish_stack_0_combo_flag_fine',
-            'combo_rsi_zone_overbought_trend_strength_down_00_combo_flag_fine',
-            'combo_rsi_zone_overbought_bearish_stack_0_crt_BUY',
-            'combo_rsi_zone_overbought_bearish_stack_0_combo_flag2_fine',
-            'combo_rsi_zone_overbought_trend_strength_down_00_trade_type_BUY',
-            'combo_rsi_zone_overbought_bearish_stack_0_trade_type_BUY',
-            'combo_rsi_zone_overbought_trend_strength_down_00_crt_BUY',
-            'combo_rsi_zone_overbought_trend_strength_down_00_combo_flag2_fine',
-            'combo_touches_lower_band_3_0_rsi_zone_overbought_trade_type_BUY',
-            'combo_touches_lower_band_3_0_rsi_zone_overbought_crt_BUY',
-            'combo_touches_lower_band_3_0_rsi_zone_overbought_combo_flag2_fine',
-            'combo_touches_lower_band_3_0_rsi_zone_overbought_combo_flag_fine',
-            'combo_touches_upper_band_3_1_touches_lower_band_2_0_trade_type_BUY',
-            'combo_touches_upper_band_3_1_touches_lower_band_2_0_crt_BUY',
-            'combo_touches_lower_band_2_0_rsi_zone_overbought_crt_BUY',
-            'combo_touches_lower_band_2_0_rsi_zone_overbought_trade_type_BUY',
-            'combo_touches_lower_band_2_0_rsi_zone_overbought_combo_flag2_fine',
-            'combo_touches_lower_band_2_0_rsi_zone_overbought_combo_flag_fine',
-            'combo_touches_lower_band_1_0_rsi_zone_overbought_combo_flag2_fine',
-            'combo_touches_lower_band_1_0_rsi_zone_overbought_crt_BUY',
-            'combo_touches_lower_band_1_0_rsi_zone_overbought_trade_type_BUY',
-            'combo_touches_lower_band_1_0_rsi_zone_overbought_combo_flag_fine',
-            'combo_touches_upper_band_1_0_touches_lower_band_3_1_combo_flag_fine',
-            'combo_touches_vwap_0_rsi_zone_overbought_combo_flag2_fine',
-            'combo_touches_vwap_0_rsi_zone_overbought_crt_BUY',
-            'combo_touches_vwap_0_rsi_zone_overbought_trade_type_BUY',
-            'combo_touches_vwap_0_rsi_zone_overbought_combo_flag_fine',
-            'combo_trade_type_SELL_rsi_bin_3040_macd_z_bin_0489012',
-            'combo_rsi_bin_3040_macd_z_bin_0489012_combo_flag2_fine',
-            'combo_crt_SELL_rsi_bin_3040_macd_z_bin_0489012',
-            'combo_rsi_bin_7080_combo_flag_fine_combo_flag2_fine',
-            'combo_trade_type_BUY_rsi_bin_7080_combo_flag_fine',
-            'combo_rsi_bin_7080_is_bad_combo_0_combo_flag_fine',
-            'combo_crt_BUY_rsi_bin_7080_combo_flag2_fine',
-            'combo_trade_type_BUY_rsi_bin_7080_is_bad_combo_0',
-            'combo_rsi_zone_overbought_trade_type_BUY_rsi_bin_7080',
-            'combo_rsi_zone_overbought_rsi_bin_7080_combo_flag2_fine',
-            'combo_crt_BUY_rsi_bin_7080_combo_flag_fine',
-            'combo_crt_BUY_trade_type_BUY_rsi_bin_7080',
-            'combo_crt_BUY_rsi_bin_7080_is_bad_combo_0',
-            'combo_trade_type_BUY_rsi_bin_7080_combo_flag2_fine',
-            'combo_rsi_zone_overbought_crt_BUY_rsi_bin_7080',
-            'combo_rsi_zone_overbought_rsi_bin_7080_combo_flag_fine',
-            'combo_rsi_bin_7080_is_bad_combo_0_combo_flag2_fine',
-            'combo_trade_type_BUY_rrr_40_rsi_bin_7080',
-            'combo_crt_BUY_rrr_40_rsi_bin_7080',
-            'combo_rrr_40_rsi_bin_7080_combo_flag_fine',
-            'combo_rrr_40_rsi_bin_7080_combo_flag2_fine',
-            'combo_bearish_stack_0_crt_BUY_rsi_bin_7080',
-            'combo_trend_strength_down_00_trade_type_BUY_rsi_bin_7080',
-            'combo_trend_strength_down_00_rsi_bin_7080_combo_flag2_fine',
-            'combo_trend_strength_down_00_rsi_bin_7080_combo_flag_fine',
-            'combo_trend_strength_down_00_crt_BUY_rsi_bin_7080',
-            'combo_bearish_stack_0_rsi_bin_7080_combo_flag2_fine',
-            'combo_bearish_stack_0_rsi_bin_7080_combo_flag_fine',
-            'combo_bearish_stack_0_trade_type_BUY_rsi_bin_7080',
-            'combo_touches_lower_band_3_0_crt_BUY_rsi_bin_7080',
-            'combo_touches_lower_band_3_0_trade_type_BUY_rsi_bin_7080',
-            'combo_touches_lower_band_3_0_rsi_bin_7080_combo_flag2_fine',
-            'combo_touches_lower_band_3_0_rsi_bin_7080_combo_flag_fine',
-            'combo_touches_lower_band_2_0_rsi_bin_7080_combo_flag_fine',
-            'combo_touches_lower_band_2_0_trade_type_BUY_rsi_bin_7080',
-            'combo_touches_lower_band_2_0_rsi_bin_7080_combo_flag2_fine',
-            'combo_touches_lower_band_2_0_crt_BUY_rsi_bin_7080',
-            'combo_touches_lower_band_1_0_rsi_bin_7080_combo_flag2_fine',
-            'combo_touches_lower_band_1_0_rsi_bin_7080_combo_flag_fine',
-            'combo_touches_lower_band_1_0_trade_type_BUY_rsi_bin_7080',
-            'combo_touches_lower_band_1_0_crt_BUY_rsi_bin_7080',
-            'combo_trade_type_SELL_rsi_bin_4050_macd_z_bin_01260517',
-            'combo_rsi_bin_4050_macd_z_bin_01260517_combo_flag2_fine',
-            'combo_crt_SELL_rsi_bin_4050_macd_z_bin_01260517',
-            'combo_touches_upper_band_3_1_touches_lower_band_1_0_combo_flag_fine',
-            'combo_touches_upper_band_1_0_touches_lower_band_3_1_combo_flag2_fine',
-            'combo_touches_vwap_0_crt_BUY_rsi_bin_7080',
-            'combo_touches_vwap_0_rsi_bin_7080_combo_flag_fine',
-            'combo_touches_vwap_0_rsi_bin_7080_combo_flag2_fine',
-            'combo_touches_vwap_0_trade_type_BUY_rsi_bin_7080',
-            'combo_minutes_0_closed_1_touches_upper_band_2_BUY',
-            'combo_touches_upper_band_3_1_touches_lower_band_1_0_combo_flag2_fine',
-            'combo_rsi_zone_overbought_crt_BUY_macd_z_bin_051710271',
-            'combo_rsi_zone_overbought_trade_type_BUY_macd_z_bin_051710271',
-            'combo_rsi_zone_overbought_macd_z_bin_051710271_combo_flag2_fine',
-            'combo_rsi_zone_overbought_combo_flag_fine_macd_z_bin_051710271',
-            'combo_rsi_zone_oversold_crt_SELL_rrr_40',
-            'combo_rsi_zone_oversold_crt_SELL_is_bad_combo_0',
-            'combo_rsi_zone_oversold_trade_type_SELL_rrr_40',
-            'combo_rsi_zone_oversold_trade_type_SELL_is_bad_combo_0',
-            'combo_rsi_zone_oversold_crt_SELL_trade_type_SELL',
-            'combo_rsi_zone_oversold_crt_SELL_combo_flag2_fine',
-            'combo_rsi_zone_oversold_trade_type_SELL_combo_flag2_fine',
-            'combo_rsi_zone_oversold_rrr_40_combo_flag2_fine',
-            'combo_rsi_zone_oversold_is_bad_combo_0_combo_flag2_fine',
-            'combo_rsi_zone_oversold_rrr_40_combo_flag_fine',
-            'combo_rsi_zone_oversold_crt_SELL_combo_flag_fine',
-            'combo_rsi_zone_oversold_is_bad_combo_0_combo_flag_fine',
-            'combo_rsi_zone_oversold_trade_type_SELL_combo_flag_fine',
-            'combo_rsi_zone_oversold_combo_flag_fine_combo_flag2_fine',
-            'combo_touches_upper_band_3_0_rsi_zone_oversold_crt_SELL',
-            'combo_touches_upper_band_3_0_rsi_zone_oversold_trade_type_SELL',
-            'combo_touches_upper_band_3_0_rsi_zone_oversold_combo_flag2_fine',
-            'combo_touches_upper_band_3_0_rsi_zone_oversold_combo_flag_fine',
-            'combo_touches_upper_band_2_0_rsi_zone_oversold_crt_SELL',
-            'combo_touches_upper_band_2_0_rsi_zone_oversold_trade_type_SELL',
-            'combo_touches_upper_band_2_0_rsi_zone_oversold_combo_flag2_fine',
-            'combo_touches_upper_band_2_0_rsi_zone_oversold_combo_flag_fine',
-            'combo_rsi_zone_oversold_trend_strength_up_00_trade_type_SELL',
-            'combo_rsi_zone_oversold_trend_strength_up_00_crt_SELL',
-            'combo_rsi_zone_oversold_trend_strength_up_00_combo_flag_fine',
-            'combo_rsi_zone_oversold_trend_strength_up_00_combo_flag2_fine',
-            'combo_touches_lower_band_2_1_macd_z_bin_0120126_combo_flag2_fine',
-            'combo_rsi_zone_overbought_trend_strength_up_10_combo_flag2_fine',
-            'combo_rsi_zone_overbought_trend_strength_up_10_trade_type_BUY',
-            'combo_rsi_zone_overbought_trend_strength_up_10_crt_BUY',
-            'combo_rsi_zone_overbought_trend_strength_up_10_combo_flag_fine',
-            'combo_rsi_zone_overbought_trend_direction_uptrend_trade_type_BUY',
-            'combo_rsi_zone_overbought_trend_direction_uptrend_crt_BUY',
-            'combo_rsi_zone_overbought_trend_direction_uptrend_combo_flag2_fine',
-            'combo_rsi_zone_overbought_trend_direction_uptrend_combo_flag_fine',
-            'combo_touches_upper_band_2_1_macd_z_bin_0120126_combo_flag2_fine',
-            'combo_touches_upper_band_1_0_rsi_zone_oversold_trade_type_SELL',
-            'combo_touches_upper_band_1_0_rsi_zone_oversold_crt_SELL',
-            'combo_touches_upper_band_1_0_rsi_zone_oversold_combo_flag2_fine',
-            'combo_touches_upper_band_1_0_touches_lower_band_3_1_crt_SELL',
-            'combo_touches_upper_band_1_0_touches_lower_band_3_1_trade_type_SELL',
-            'combo_touches_upper_band_1_0_rsi_zone_oversold_combo_flag_fine',
-            'combo_touches_upper_band_3_1_touches_lower_band_1_0_crt_BUY',
-            'combo_touches_upper_band_3_1_touches_lower_band_1_0_trade_type_BUY',
-            'combo_session_q2_trade_type_SELL_rsi_bin_3040',
-            'combo_session_q2_crt_SELL_rsi_bin_3040',
-            'combo_touches_vwap_0_rsi_zone_oversold_crt_SELL',
-            'combo_touches_vwap_0_rsi_zone_oversold_trade_type_SELL',
-            'combo_touches_vwap_0_rsi_zone_oversold_combo_flag2_fine',
-            'combo_touches_vwap_0_rsi_zone_oversold_combo_flag_fine',
-            'combo_trade_type_SELL_rsi_bin_2030_combo_flag2_fine',
-            'combo_rsi_bin_2030_is_bad_combo_0_combo_flag2_fine',
-            'combo_rrr_40_rsi_bin_2030_combo_flag_fine',
-            'combo_rsi_bin_2030_is_bad_combo_0_combo_flag_fine',
-            'combo_trade_type_SELL_rsi_bin_2030_combo_flag_fine',
-            'combo_rsi_bin_2030_combo_flag_fine_combo_flag2_fine',
-            'combo_crt_SELL_rsi_bin_2030_combo_flag_fine',
-            'combo_rsi_zone_oversold_rsi_bin_2030_combo_flag2_fine',
-            'combo_crt_SELL_trade_type_SELL_rsi_bin_2030',
-            'combo_rrr_40_rsi_bin_2030_combo_flag2_fine',
-            'combo_trade_type_SELL_rsi_bin_2030_is_bad_combo_0',
-            'combo_crt_SELL_rrr_40_rsi_bin_2030',
-            'combo_rsi_zone_oversold_crt_SELL_rsi_bin_2030',
-            'combo_rsi_zone_oversold_rsi_bin_2030_combo_flag_fine',
-            'combo_rsi_zone_oversold_trade_type_SELL_rsi_bin_2030',
-            'combo_crt_SELL_rsi_bin_2030_is_bad_combo_0',
-            'combo_trade_type_SELL_rrr_40_rsi_bin_2030',
-            'combo_crt_SELL_rsi_bin_2030_combo_flag2_fine',
-            'combo_touches_upper_band_3_0_rsi_bin_2030_combo_flag2_fine',
-            'combo_touches_upper_band_3_0_rsi_bin_2030_combo_flag_fine',
-            'combo_touches_upper_band_3_0_trade_type_SELL_rsi_bin_2030',
-            'combo_touches_upper_band_3_0_crt_SELL_rsi_bin_2030',
-            'combo_touches_upper_band_2_0_rsi_bin_2030_combo_flag2_fine',
-            'combo_touches_upper_band_2_0_crt_SELL_rsi_bin_2030',
-            'combo_touches_upper_band_2_0_rsi_bin_2030_combo_flag_fine',
-            'combo_touches_upper_band_2_0_trade_type_SELL_rsi_bin_2030',
-            'combo_trend_strength_up_00_trade_type_SELL_rsi_bin_2030',
-            'combo_trend_strength_up_00_rsi_bin_2030_combo_flag_fine',
-            'combo_trend_strength_up_00_crt_SELL_rsi_bin_2030',
-            'combo_trend_strength_up_00_rsi_bin_2030_combo_flag2_fine',
-            'combo_touches_upper_band_1_0_trade_type_SELL_rsi_bin_2030',
-            'combo_touches_upper_band_1_0_rsi_bin_2030_combo_flag2_fine',
-            'combo_touches_upper_band_1_0_crt_SELL_rsi_bin_2030',
-            'combo_touches_upper_band_1_0_rsi_bin_2030_combo_flag_fine',
-            'combo_trend_direction_uptrend_rsi_bin_7080_combo_flag2_fine',
-            'combo_trend_strength_up_10_rsi_bin_7080_combo_flag_fine',
-            'combo_trend_strength_up_10_rsi_bin_7080_combo_flag2_fine',
-            'combo_trend_direction_uptrend_crt_BUY_rsi_bin_7080',
-            'combo_trend_direction_uptrend_trade_type_BUY_rsi_bin_7080',
-            'combo_trend_direction_uptrend_rsi_bin_7080_combo_flag_fine',
-            'combo_trend_strength_up_10_crt_BUY_rsi_bin_7080',
-            'combo_trend_strength_up_10_trade_type_BUY_rsi_bin_7080',
-            'combo_touches_vwap_0_trade_type_SELL_rsi_bin_2030',
-            'combo_touches_vwap_0_rsi_bin_2030_combo_flag_fine',
-            'combo_touches_vwap_0_crt_SELL_rsi_bin_2030',
-            'combo_touches_vwap_0_rsi_bin_2030_combo_flag2_fine',
-            'combo_touches_vwap_1_rsi_bin_3040_combo_flag2_fine',
-            'combo_rsi_zone_oversold_crt_SELL_macd_z_bin_132560489',
-            'combo_rsi_zone_oversold_trade_type_SELL_macd_z_bin_132560489',
-            'combo_rsi_zone_oversold_macd_z_bin_132560489_combo_flag2_fine',
-            'combo_rsi_zone_oversold_combo_flag_fine_macd_z_bin_132560489',
-            'combo_touches_lower_band_3_0_rsi_zone_oversold_trade_type_SELL',
-            'combo_touches_lower_band_3_0_rsi_zone_oversold_crt_SELL',
-            'combo_touches_lower_band_3_0_rsi_zone_oversold_combo_flag2_fine',
-            'combo_touches_lower_band_3_0_rsi_zone_oversold_combo_flag_fine',
-            'combo_touches_upper_band_3_1_rsi_bin_6070_combo_flag2_fine',
-            'combo_rsi_zone_oversold_trend_direction_downtrend_crt_SELL',
-            'combo_rsi_zone_oversold_trend_strength_down_10_combo_flag2_fine',
-            'combo_rsi_zone_oversold_trend_direction_downtrend_combo_flag_fine',
-            'combo_rsi_zone_oversold_trend_direction_downtrend_combo_flag2_fine',
-            'combo_rsi_zone_oversold_trend_strength_down_10_crt_SELL',
-            'combo_rsi_zone_oversold_bearish_stack_1_crt_SELL',
-            'combo_rsi_zone_oversold_bearish_stack_1_trade_type_SELL',
-            'combo_rsi_zone_oversold_bearish_stack_1_combo_flag_fine',
-            'combo_rsi_zone_oversold_bearish_stack_1_combo_flag2_fine',
-            'combo_rsi_zone_oversold_trend_strength_down_10_trade_type_SELL',
-            'combo_rsi_zone_oversold_trend_direction_downtrend_trade_type_SELL',
-            'combo_rsi_zone_oversold_trend_strength_down_10_combo_flag_fine',
-            'combo_touches_upper_band_3_1_trend_direction_uptrend_trade_type_BUY',
-            'combo_touches_upper_band_3_1_trend_direction_uptrend_crt_BUY',
-            'combo_touches_upper_band_3_1_trend_strength_up_10_crt_BUY',
-            'combo_touches_upper_band_3_1_trend_strength_up_10_trade_type_BUY',
-            'combo_touches_vwap_1_rsi_bin_6070_combo_flag_fine',
-            'combo_touches_vwap_1_crt_BUY_rsi_bin_6070',
-            'combo_touches_vwap_1_trade_type_BUY_rsi_bin_6070',
-            'combo_rsi_bin_2030_combo_flag_fine_macd_z_bin_132560489',
-            'combo_crt_SELL_rsi_bin_2030_macd_z_bin_132560489',
-            'combo_rsi_bin_2030_macd_z_bin_132560489_combo_flag2_fine',
-            'combo_trade_type_SELL_rsi_bin_2030_macd_z_bin_132560489',
-            'combo_touches_lower_band_3_0_rsi_bin_2030_combo_flag2_fine',
-            'combo_touches_lower_band_3_0_crt_SELL_rsi_bin_2030',
-            'combo_touches_lower_band_3_0_trade_type_SELL_rsi_bin_2030',
-            'combo_touches_lower_band_3_0_rsi_bin_2030_combo_flag_fine',
-            'combo_touches_vwap_0_touches_lower_band_3_1_combo_flag_fine',
-            'combo_trend_direction_downtrend_rsi_bin_2030_combo_flag2_fine',
-            'combo_trend_direction_downtrend_rsi_bin_2030_combo_flag_fine',
-            'combo_trend_direction_downtrend_trade_type_SELL_rsi_bin_2030',
-            'combo_trend_strength_down_10_crt_SELL_rsi_bin_2030',
-            'combo_trend_strength_down_10_trade_type_SELL_rsi_bin_2030',
-            'combo_trend_strength_down_10_rsi_bin_2030_combo_flag_fine',
-            'combo_trend_strength_down_10_rsi_bin_2030_combo_flag2_fine',
-            'combo_trend_direction_downtrend_crt_SELL_rsi_bin_2030',
-            'combo_bearish_stack_1_trade_type_SELL_rsi_bin_2030',
-            'combo_bearish_stack_1_rsi_bin_2030_combo_flag_fine',
-            'combo_bearish_stack_1_crt_SELL_rsi_bin_2030',
-            'combo_bearish_stack_1_rsi_bin_2030_combo_flag2_fine',
-            'combo_touches_lower_band_3_1_rsi_bin_3040_combo_flag2_fine',
-            'combo_touches_vwap_0_touches_lower_band_3_1_combo_flag2_fine',
-            'combo_touches_upper_band_2_1_rsi_zone_overbought_crt_BUY',
-            'combo_touches_upper_band_2_1_rsi_zone_overbought_trade_type_BUY',
-            'combo_touches_upper_band_2_1_rsi_zone_overbought_combo_flag2_fine',
-            'combo_touches_upper_band_2_1_rsi_zone_overbought_combo_flag_fine',
-            'combo_touches_vwap_0_touches_upper_band_3_1_combo_flag2_fine',
-            'combo_touches_vwap_0_touches_upper_band_3_1_combo_flag_fine',
-            'combo_touches_vwap_0_touches_lower_band_3_1_crt_SELL',
-            'combo_touches_vwap_0_touches_lower_band_3_1_trade_type_SELL',
-            'combo_touches_upper_band_3_1_rsi_bin_6070_combo_flag_fine',
-            'combo_touches_upper_band_3_1_crt_BUY_rsi_bin_6070',
-            'combo_touches_upper_band_3_1_trade_type_BUY_rsi_bin_6070',
-            'combo_touches_upper_band_3_1_crt_BUY_macd_z_bin_01260517',
-            'combo_touches_upper_band_3_1_trade_type_BUY_macd_z_bin_01260517',
-            'combo_touches_lower_band_3_1_trend_strength_down_10_trade_type_SELL',
-            'combo_touches_lower_band_3_1_bearish_stack_1_crt_SELL',
-            'combo_touches_lower_band_3_1_bearish_stack_1_trade_type_SELL',
-            'combo_touches_lower_band_3_1_trend_strength_down_10_crt_SELL',
-            'combo_touches_lower_band_3_1_trend_direction_downtrend_crt_SELL',
-            'combo_touches_lower_band_3_1_trend_direction_downtrend_trade_type_SELL',
-            'combo_touches_vwap_0_touches_upper_band_3_1_crt_BUY',
-            'combo_touches_vwap_0_touches_upper_band_3_1_trade_type_BUY',
-            'combo_touches_vwap_1_crt_SELL_rsi_bin_3040',
-            'combo_touches_vwap_1_trade_type_SELL_rsi_bin_3040',
-            'combo_touches_lower_band_3_1_crt_SELL_macd_z_bin_0489012',
-            'combo_touches_lower_band_3_1_trade_type_SELL_macd_z_bin_0489012',
-            'combo_touches_upper_band_2_1_rsi_bin_7080_combo_flag2_fine',
-            'combo_touches_upper_band_2_1_crt_BUY_rsi_bin_7080',
-            'combo_touches_upper_band_2_1_rsi_bin_7080_combo_flag_fine',
-            'combo_touches_upper_band_2_1_trade_type_BUY_rsi_bin_7080',
-            'combo_touches_lower_band_2_1_rsi_zone_oversold_crt_SELL',
-            'combo_touches_lower_band_2_1_rsi_zone_oversold_trade_type_SELL',
-            'combo_touches_lower_band_2_1_rsi_zone_oversold_combo_flag2_fine',
-            'combo_touches_lower_band_2_1_rsi_zone_oversold_combo_flag_fine',
-            'combo_touches_lower_band_3_1_crt_SELL_rsi_bin_3040',
-            'combo_touches_lower_band_3_1_trade_type_SELL_rsi_bin_3040',
-            'combo_touches_upper_band_3_1_macd_z_bin_0120126_combo_flag2_fine',
-            'combo_touches_lower_band_3_1_macd_z_bin_0120126_combo_flag2_fine',
-            'combo_touches_lower_band_2_1_crt_SELL_rsi_bin_2030',
-            'combo_touches_lower_band_2_1_rsi_bin_2030_combo_flag2_fine',
-            'combo_touches_lower_band_2_1_rsi_bin_2030_combo_flag_fine',
-            'combo_touches_lower_band_2_1_trade_type_SELL_rsi_bin_2030',
-            'combo_touches_lower_band_3_1_session_q3_combo_flag_fine',
-            'combo_session_q3_rsi_zone_overbought_combo_flag2_fine',
-            'combo_session_q3_rsi_zone_overbought_combo_flag_fine',
-            'combo_session_q3_rsi_zone_overbought_trade_type_BUY',
-            'combo_session_q3_rsi_zone_overbought_crt_BUY',
-            'combo_touches_upper_band_1_1_touches_upper_band_2_1_rsi_zone_overbought',
-            'combo_crt_BUY_rsi_bin_5060_macd_z_bin_132560489',
-            'combo_trade_type_BUY_rsi_bin_5060_macd_z_bin_132560489',
-            'combo_rsi_bin_5060_macd_z_bin_132560489_combo_flag2_fine'
-        ]
-
-    def _get_rsi_bin_features(self):
-        """Return RSI bin one-hot features"""
-        return [
-            'rsi_bin_(0, 20]', 'rsi_bin_(20, 30]', 'rsi_bin_(30, 40]', 
-            'rsi_bin_(40, 50]', 'rsi_bin_(50, 60]', 'rsi_bin_(60, 70]', 
-            'rsi_bin_(70, 80]', 'rsi_bin_(80, 100]'
-        ]
-
-    def _get_combo_key_features(self):
-        """Return combo key one-hot features"""
-        return [
-            'combo_key_BUY_downtrend_(0, 20]', 'combo_key_BUY_downtrend_(20, 30]',
-            'combo_key_BUY_downtrend_(30, 40]', 'combo_key_BUY_downtrend_(40, 50]',
-            'combo_key_BUY_downtrend_(50, 60]', 'combo_key_BUY_downtrend_(60, 70]',
-            'combo_key_BUY_downtrend_(70, 80]', 'combo_key_BUY_sideways_(0, 20]',
-            'combo_key_BUY_sideways_(20, 30]', 'combo_key_BUY_sideways_(30, 40]',
-            'combo_key_BUY_sideways_(40, 50]', 'combo_key_BUY_sideways_(50, 60]',
-            'combo_key_BUY_sideways_(60, 70]', 'combo_key_BUY_sideways_(70, 80]',
-            'combo_key_BUY_sideways_(80, 100]', 'combo_key_BUY_uptrend_(0, 20]',
-            'combo_key_BUY_uptrend_(20, 30]', 'combo_key_BUY_uptrend_(30, 40]',
-            'combo_key_BUY_uptrend_(40, 50]', 'combo_key_BUY_uptrend_(50, 60]',
-            'combo_key_BUY_uptrend_(60, 70]', 'combo_key_BUY_uptrend_(70, 80]',
-            'combo_key_BUY_uptrend_(80, 100]', 'combo_key_SELL_downtrend_(0, 20]',
-            'combo_key_SELL_downtrend_(20, 30]', 'combo_key_SELL_downtrend_(30, 40]',
-            'combo_key_SELL_downtrend_(40, 50]', 'combo_key_SELL_downtrend_(50, 60]',
-            'combo_key_SELL_downtrend_(60, 70]', 'combo_key_SELL_downtrend_(70, 80]',
-            'combo_key_SELL_sideways_(20, 30]', 'combo_key_SELL_sideways_(30, 40]',
-            'combo_key_SELL_sideways_(40, 50]', 'combo_key_SELL_sideways_(50, 60]',
-            'combo_key_SELL_sideways_(60, 70]', 'combo_key_SELL_sideways_(70, 80]',
-            'combo_key_SELL_sideways_(80, 100]', 'combo_key_SELL_uptrend_(20, 30]',
-            'combo_key_SELL_uptrend_(30, 40]', 'combo_key_SELL_uptrend_(40, 50]',
-            'combo_key_SELL_uptrend_(50, 60]', 'combo_key_SELL_uptrend_(60, 70]',
-            'combo_key_SELL_uptrend_(70, 80]', 'combo_key_SELL_uptrend_(80, 100]',
-            'combo_key_nan_downtrend_(0, 20]', 'combo_key_nan_downtrend_(20, 30]',
-            'combo_key_nan_downtrend_(30, 40]', 'combo_key_nan_downtrend_(40, 50]',
-            'combo_key_nan_downtrend_(50, 60]', 'combo_key_nan_downtrend_(60, 70]',
-            'combo_key_nan_downtrend_(70, 80]', 'combo_key_nan_sideways_(0, 20]',
-            'combo_key_nan_sideways_(20, 30]', 'combo_key_nan_sideways_(30, 40]',
-            'combo_key_nan_sideways_(40, 50]', 'combo_key_nan_sideways_(50, 60]',
-            'combo_key_nan_sideways_(60, 70]', 'combo_key_nan_sideways_(70, 80]',
-            'combo_key_nan_sideways_(80, 100]', 'combo_key_nan_uptrend_(20, 30]',
-            'combo_key_nan_uptrend_(30, 40]', 'combo_key_nan_uptrend_(40, 50]',
-            'combo_key_nan_uptrend_(50, 60]', 'combo_key_nan_uptrend_(60, 70]',
-            'combo_key_nan_uptrend_(70, 80]', 'combo_key_nan_uptrend_(80, 100]'
-        ]
-
-    def _get_macd_z_bin_features(self):
-        """Return MACD z-bin one-hot features"""
-        return [
-            'macd_z_bin_0', 'macd_z_bin_(-0.12, 0.126]', 
-            'macd_z_bin_(-0.489, -0.12]', 'macd_z_bin_(-13.256, -0.489]',
-            'macd_z_bin_(0.126, 0.517]', 'macd_z_bin_(0.517, 10.271]'
-        ]
-
-    def _get_combo_key2_features(self):
-        """Return combo key2 one-hot features"""
-        return [
-            'combo_key2_BUY_(0, 20]_(-0.12, 0.126]', 'combo_key2_BUY_(0, 20]_(-0.489, -0.12]',
-            'combo_key2_BUY_(0, 20]_(-13.256, -0.489]', 'combo_key2_BUY_(0, 20]_(0.126, 0.517]',
-            'combo_key2_BUY_(20, 30]_(-0.12, 0.126]', 'combo_key2_BUY_(20, 30]_(-0.489, -0.12]',
-            'combo_key2_BUY_(20, 30]_(-13.256, -0.489]', 'combo_key2_BUY_(20, 30]_(0.126, 0.517]',
-            'combo_key2_BUY_(20, 30]_(0.517, 10.271]', 'combo_key2_BUY_(30, 40]_(-0.12, 0.126]',
-            'combo_key2_BUY_(30, 40]_(-0.489, -0.12]', 'combo_key2_BUY_(30, 40]_(-13.256, -0.489]',
-            'combo_key2_BUY_(30, 40]_(0.126, 0.517]', 'combo_key2_BUY_(30, 40]_(0.517, 10.271]',
-            'combo_key2_BUY_(40, 50]_(-0.12, 0.126]', 'combo_key2_BUY_(40, 50]_(-0.489, -0.12]',
-            'combo_key2_BUY_(40, 50]_(-13.256, -0.489]', 'combo_key2_BUY_(40, 50]_(0.126, 0.517]',
-            'combo_key2_BUY_(40, 50]_(0.517, 10.271]', 'combo_key2_BUY_(50, 60]_(-0.12, 0.126]',
-            'combo_key2_BUY_(50, 60]_(-0.489, -0.12]', 'combo_key2_BUY_(50, 60]_(-13.256, -0.489]',
-            'combo_key2_BUY_(50, 60]_(0.126, 0.517]', 'combo_key2_BUY_(50, 60]_(0.517, 10.271]',
-            'combo_key2_BUY_(60, 70]_(-0.12, 0.126]', 'combo_key2_BUY_(60, 70]_(-0.489, -0.12]',
-            'combo_key2_BUY_(60, 70]_(0.126, 0.517]', 'combo_key2_BUY_(60, 70]_(0.517, 10.271]',
-            'combo_key2_BUY_(70, 80]_(-0.12, 0.126]', 'combo_key2_BUY_(70, 80]_(0.126, 0.517]',
-            'combo_key2_BUY_(70, 80]_(0.517, 10.271]', 'combo_key2_BUY_(80, 100]_(0.517, 10.271]',
-            'combo_key2_SELL_(0, 20]_(-13.256, -0.489]', 'combo_key2_SELL_(20, 30]_(-0.12, 0.126]',
-            'combo_key2_SELL_(20, 30]_(-0.489, -0.12]', 'combo_key2_SELL_(20, 30]_(-13.256, -0.489]',
-            'combo_key2_SELL_(20, 30]_(0.126, 0.517]', 'combo_key2_SELL_(30, 40]_(-0.12, 0.126]',
-            'combo_key2_SELL_(30, 40]_(-0.489, -0.12]', 'combo_key2_SELL_(30, 40]_(-13.256, -0.489]',
-            'combo_key2_SELL_(30, 40]_(0.126, 0.517]', 'combo_key2_SELL_(30, 40]_(0.517, 10.271]',
-            'combo_key2_SELL_(40, 50]_(-0.12, 0.126]', 'combo_key2_SELL_(40, 50]_(-0.489, -0.12]',
-            'combo_key2_SELL_(40, 50]_(-13.256, -0.489]', 'combo_key2_SELL_(40, 50]_(0.126, 0.517]',
-            'combo_key2_SELL_(40, 50]_(0.517, 10.271]', 'combo_key2_SELL_(50, 60]_(-0.12, 0.126]',
-            'combo_key2_SELL_(50, 60]_(-0.489, -0.12]', 'combo_key2_SELL_(50, 60]_(-13.256, -0.489]',
-            'combo_key2_SELL_(50, 60]_(0.126, 0.517]', 'combo_key2_SELL_(50, 60]_(0.517, 10.271]',
-            'combo_key2_SELL_(60, 70]_(-0.12, 0.126]', 'combo_key2_SELL_(60, 70]_(-0.489, -0.12]',
-            'combo_key2_SELL_(60, 70]_(-13.256, -0.489]', 'combo_key2_SELL_(60, 70]_(0.126, 0.517]',
-            'combo_key2_SELL_(60, 70]_(0.517, 10.271]', 'combo_key2_SELL_(70, 80]_(-0.12, 0.126]',
-            'combo_key2_SELL_(70, 80]_(-0.489, -0.12]', 'combo_key2_SELL_(70, 80]_(0.126, 0.517]',
-            'combo_key2_SELL_(70, 80]_(0.517, 10.271]', 'combo_key2_SELL_(80, 100]_(-0.12, 0.126]',
-            'combo_key2_SELL_(80, 100]_(0.517, 10.271]', 'combo_key2_nan_(0, 20]_(-0.12, 0.126]',
-            'combo_key2_nan_(0, 20]_(-0.489, -0.12]', 'combo_key2_nan_(0, 20]_(-13.256, -0.489]',
-            'combo_key2_nan_(0, 20]_nan', 'combo_key2_nan_(20, 30]_(-0.12, 0.126]',
-            'combo_key2_nan_(20, 30]_(-0.489, -0.12]', 'combo_key2_nan_(20, 30]_(-13.256, -0.489]',
-            'combo_key2_nan_(20, 30]_(0.126, 0.517]', 'combo_key2_nan_(20, 30]_(0.517, 10.271]',
-            'combo_key2_nan_(30, 40]_(-0.12, 0.126]', 'combo_key2_nan_(30, 40]_(-0.489, -0.12]',
-            'combo_key2_nan_(30, 40]_(-13.256, -0.489]', 'combo_key2_nan_(30, 40]_(0.126, 0.517]',
-            'combo_key2_nan_(30, 40]_(0.517, 10.271]', 'combo_key2_nan_(40, 50]_(-0.12, 0.126]',
-            'combo_key2_nan_(40, 50]_(-0.489, -0.12]', 'combo_key2_nan_(40, 50]_(-13.256, -0.489]',
-            'combo_key2_nan_(40, 50]_(0.126, 0.517]', 'combo_key2_nan_(40, 50]_(0.517, 10.271]',
-            'combo_key2_nan_(50, 60]_(-0.12, 0.126]', 'combo_key2_nan_(50, 60]_(-0.489, -0.12]',
-            'combo_key2_nan_(50, 60]_(-13.256, -0.489]', 'combo_key2_nan_(50, 60]_(0.126, 0.517]',
-            'combo_key2_nan_(50, 60]_(0.517, 10.271]', 'combo_key2_nan_(60, 70]_(-0.12, 0.126]',
-            'combo_key2_nan_(60, 70]_(-0.489, -0.12]', 'combo_key2_nan_(60, 70]_(-13.256, -0.489]',
-            'combo_key2_nan_(60, 70]_(0.126, 0.517]', 'combo_key2_nan_(60, 70]_(0.517, 10.271]',
-            'combo_key2_nan_(70, 80]_(-0.12, 0.126]', 'combo_key2_nan_(70, 80]_(-0.489, -0.12]',
-            'combo_key2_nan_(70, 80]_(-13.256, -0.489]', 'combo_key2_nan_(70, 80]_(0.126, 0.517]',
-            'combo_key2_nan_(70, 80]_(0.517, 10.271]', 'combo_key2_nan_(80, 100]_(-0.12, 0.126]',
-            'combo_key2_nan_(80, 100]_(0.126, 0.517]', 'combo_key2_nan_(80, 100]_(0.517, 10.271]'
-        ]
+    def _initialize_combo2_dictionary(self) -> Dict[str, float]:
+        """Initialize combo2 dictionary with win rates"""
+        return {
+            'BUY_(50, 60]_(-0.12, 0.126]': 0.68,
+            'BUY_(60, 70]_(0.126, 0.517]': 0.61,
+            'SELL_(30, 40]_(-0.489, -0.12]': 0.59,
+            'BUY_(40, 50]_(-0.12, 0.126]': 0.63,
+            'SELL_(50, 60]_(0.126, 0.517]': 0.55,
+            'BUY_(70, 80]_(0.517, 10.271]': 0.52,
+            'SELL_(40, 50]_(-0.489, -0.12]': 0.57,
+            'BUY_(50, 60]_(0.126, 0.517]': 0.64,
+            'SELL_(60, 70]_(-0.12, 0.126]': 0.53,
+            'BUY_(30, 40]_(-0.12, 0.126]': 0.48,
+            'SELL_(70, 80]_(0.517, 10.271]': 0.45,
+            'BUY_(60, 70]_(-0.12, 0.126]': 0.58,
+            'SELL_(50, 60]_(-0.489, -0.12]': 0.51,
+            'BUY_(40, 50]_(0.126, 0.517]': 0.60,
+            'SELL_(60, 70]_(0.126, 0.517]': 0.49,
+            'BUY_(70, 80]_(-0.12, 0.126]': 0.47,
+            'SELL_(40, 50]_(0.126, 0.517]': 0.46,
+            'BUY_(30, 40]_(-0.489, -0.12]': 0.42,
+            'SELL_(70, 80]_(-0.12, 0.126]': 0.44,
+            'BUY_(50, 60]_(-0.489, -0.12]': 0.41,
+            'SELL_(30, 40]_(0.126, 0.517]': 0.43,
+            'BUY_(60, 70]_(-0.489, -0.12]': 0.39,
+            'SELL_(50, 60]_(-0.12, 0.126]': 0.40,
+            'BUY_(40, 50]_(-0.489, -0.12]': 0.38
+        }
 
     def _safe_technical_calculation(self, func, **kwargs):
         """Safely calculate technical indicators with error handling"""
@@ -1312,7 +519,7 @@ class FeatureEngineer:
             logger.error(f"Error in {func.__name__}: {str(e)}")
             return None
 
-    def calculate_technical_indicators(self, df):
+    def calculate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate all technical indicators"""
         try:
             df = df.copy()
@@ -1357,10 +564,7 @@ class FeatureEngineer:
                 df["macd_line"] = np.nan
                 df["macd_z"] = np.nan
             
-            # 6. Dollar Volume
-            df["dollar_volume"] = (df["adj close"] * df["volume"]) / 1e6
-            
-            # 7. Moving Averages
+            # 6. Moving Averages
             df["ma_10"] = df["adj close"].rolling(10, min_periods=1).mean()
             df["ma_100"] = df["adj close"].rolling(100, min_periods=1).mean()
             
@@ -1368,7 +572,7 @@ class FeatureEngineer:
             for length in [20, 30, 40, 60]:
                 df[f"ma_{length}"] = df["close"].rolling(window=length, min_periods=1).mean()
             
-            # 8. VWAP calculations
+            # 7. VWAP calculations
             typical_price = (df["high"] + df["low"] + df["close"]) / 3
             vwap_num = (typical_price * df["volume"]).cumsum()
             vwap_den = df["volume"].cumsum()
@@ -1381,7 +585,7 @@ class FeatureEngineer:
             logger.error(f"Error in calculate_technical_indicators: {str(e)}")
             return df
 
-    def calculate_vwap_bands(self, df):
+    def calculate_vwap_bands(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate VWAP bands with session-based reset"""
         try:
             # Detect timeframe
@@ -1392,7 +596,7 @@ class FeatureEngineer:
             tf_minutes = int(round(time_diff))
             
             # Get session length
-            session_hours = self.tf_to_session_hours.get(tf_minutes, 12)
+            session_hours = self.tf_to_session_hours.get(self.timeframe, 24)
             freq = f"{int(session_hours * 60)}min"
             
             # VWAP calculations per session
@@ -1435,7 +639,7 @@ class FeatureEngineer:
             logger.error(f"Error in calculate_vwap_bands: {str(e)}")
             return df
 
-    def calculate_trend_indicators(self, df):
+    def calculate_trend_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate trend strength and direction"""
         try:
             df = df.copy()
@@ -1460,13 +664,21 @@ class FeatureEngineer:
                 (df['ma_40'] < df['ma_60'])
             ).astype(float)
             
+            # Trend direction (needed for combo key)
+            conditions = [
+                df['trend_strength_up'] > df['trend_strength_down'],
+                df['trend_strength_down'] > df['trend_strength_up']
+            ]
+            choices = ['uptrend', 'downtrend']
+            df['trend_direction'] = np.select(conditions, choices, default='sideways')
+            
             return df
             
         except Exception as e:
             logger.error(f"Error in calculate_trend_indicators: {str(e)}")
             return df
 
-    def calculate_trade_features(self, df, signal_type):
+    def calculate_trade_features(self, df: pd.DataFrame, signal_type: str) -> pd.DataFrame:
         """Calculate trade-related features"""
         try:
             df = df.copy()
@@ -1489,7 +701,10 @@ class FeatureEngineer:
             # Trade management features
             df['sl_distance'] = (df['open'] - df['sl_price']).abs() * 10
             df['tp_distance'] = (df['tp_price'] - df['open']).abs() * 10
+            
+            # Calculate RRR
             df['rrr'] = df['tp_distance'] / df['sl_distance'].replace(0, np.nan)
+            
             df['log_sl'] = np.log1p(df['sl_price'])
             
             # Set trade type
@@ -1501,7 +716,7 @@ class FeatureEngineer:
             logger.error(f"Error in calculate_trade_features: {str(e)}")
             return df
 
-    def calculate_candle_metrics(self, df):
+    def calculate_candle_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate candle body and wick metrics"""
         try:
             df = df.copy()
@@ -1523,8 +738,60 @@ class FeatureEngineer:
             logger.error(f"Error in calculate_candle_metrics: {str(e)}")
             return df
 
-    def calculate_session_time_features(self, df):
-        """Calculate session and time-based features"""
+    def calculate_ratio_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate all ratio-based features"""
+        try:
+            df = df.copy()
+            
+            # Ratio features
+            df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
+            df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
+            df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
+            df['sl_div_atr'] = df['sl_distance'] / (df['atr_z'] + 1e-6)
+            df['tp_div_atr'] = df['tp_distance'] / (df['atr_z'] + 1e-6)
+            df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
+            
+            return df
+        except Exception as e:
+            logger.error(f"Error in calculate_ratio_features: {str(e)}")
+            return df
+
+    def calculate_advanced_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate advanced time-based features"""
+        try:
+            df = df.copy()
+            
+            # Ensure datetime index
+            if not isinstance(df.index, pd.DatetimeIndex):
+                if "time" in df.columns:
+                    df["time"] = pd.to_datetime(df["time"])
+                    df = df.set_index("time")
+                else:
+                    raise ValueError("No datetime index or 'time' column found")
+            
+            # Basic time features
+            df['hour'] = df.index.hour
+            df['month'] = df.index.month
+            df['dayofweek'] = df.index.dayofweek
+            df['is_weekend'] = (df.index.dayofweek >= 5).astype(int)
+            
+            # Cyclical time features
+            df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+            df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+            df['dayofweek_sin'] = np.sin(2 * np.pi * df['dayofweek'] / 7)
+            df['dayofweek_cos'] = np.cos(2 * np.pi * df['dayofweek'] / 7)
+            
+            # Time difference features
+            df['timestamp'] = df.index.astype('int64') // 1e9  # seconds
+            df['time_diff'] = df.index.to_series().diff().dt.total_seconds().fillna(0)
+            
+            return df
+        except Exception as e:
+            logger.error(f"Error in calculate_advanced_time_features: {str(e)}")
+            return df
+
+    def calculate_session_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate session and time-based features with timeframe-specific minute encoding"""
         try:
             df = df.copy()
             
@@ -1548,37 +815,156 @@ class FeatureEngineer:
             
             df['session'] = df.index.hour.map(get_session)
             
-            # Minutes closed
-            df['minutes,closed'] = df.index.minute
+            # Timeframe-specific minute one-hot encoding
+            minutes = df.index.minute
+            
+            if self.timeframe == '15m':
+                minute_bins = [0, 15, 30, 45, 60]
+                minute_labels = ['0', '15', '30', '45']
+            else:  # 5m
+                minute_bins = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+                minute_labels = ['0', '5', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55']
+            
+            df['minute_bin'] = pd.cut(minutes, bins=minute_bins, labels=minute_labels, right=False)
             
             return df
-            
         except Exception as e:
             logger.error(f"Error in calculate_session_time_features: {str(e)}")
             return df
 
-    def create_bins(self, df):
-        """Create bin features for various indicators"""
+    def calculate_volume_bins(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate volume and dollar volume bins"""
+        try:
+            df = df.copy()
+            
+            # Calculate dollar volume if not exists
+            if 'dollar_volume' not in df.columns:
+                df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
+            
+            # Volume bins (quintiles)
+            df['volume_bin'] = pd.qcut(df['volume'], q=5, duplicates='drop', labels=False)
+            df['dollar_volume_bin'] = pd.qcut(df['dollar_volume'], q=5, duplicates='drop', labels=False)
+            
+            return df
+        except Exception as e:
+            logger.error(f"Error in calculate_volume_bins: {str(e)}")
+            return df
+
+    def create_bins(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create bin features for RSI and MACD z-score"""
         try:
             df = df.copy()
             
             # RSI bins
-            df['rsi_bin'] = pd.cut(df['rsi'], bins=self.rsi_bins)
+            rsi_bin_labels = ['(0, 20]', '(20, 30]', '(30, 40]', '(40, 50]', '(50, 60]', '(60, 70]', '(70, 80]', '(80, 100]']
+            df['rsi_bin'] = pd.cut(df['rsi'], bins=self.rsi_bins, labels=rsi_bin_labels, include_lowest=True)
             
             # MACD z bins
-            df['macd_z_bin'] = pd.qcut(df['macd_z'], q=5, duplicates='drop')
-            
-            # Volume bins (using quintiles)
-            df['volume_bin'] = pd.qcut(df['volume'], q=5, duplicates='drop')
-            df['dollar_volume_bin'] = pd.qcut(df['dollar_volume'], q=5, duplicates='drop')
+            macd_z_bin_labels = ['(-13.256, -0.489]', '(-0.489, -0.12]', '(-0.12, 0.126]', '(0.126, 0.517]', '(0.517, 10.271]']
+            df['macd_z_bin'] = pd.cut(df['macd_z'], bins=self.macd_z_bins, labels=macd_z_bin_labels, include_lowest=True)
             
             return df
-            
         except Exception as e:
             logger.error(f"Error in create_bins: {str(e)}")
             return df
 
-    def calculate_one_hot_features(self, df):
+    def _get_combo_key(self, row) -> str:
+        """Generate combo key based on trade_type, trend_direction, and rsi_bin"""
+        try:
+            trade_type = row.get('trade_type', 'nan')
+            trend_direction = row.get('trend_direction', 'nan')
+            rsi_bin = str(row.get('rsi_bin', 'nan'))
+            
+            return f"{trade_type}_{trend_direction}_{rsi_bin}"
+        except Exception as e:
+            logger.error(f"Error generating combo key: {e}")
+            return "nan_nan_nan"
+
+    def _get_combo_key2(self, row) -> str:
+        """Generate combo key2 based on trade_type, rsi_bin, and macd_z_bin"""
+        try:
+            trade_type = row.get('trade_type', 'nan')
+            rsi_bin = str(row.get('rsi_bin', 'nan'))
+            macd_z_bin = str(row.get('macd_z_bin', 'nan'))
+            
+            return f"{trade_type}_{rsi_bin}_{macd_z_bin}"
+        except Exception as e:
+            logger.error(f"Error generating combo key2: {e}")
+            return "nan_nan_nan"
+
+    def _get_combo_flag(self, win_rate: float) -> str:
+        """Determine combo flag based on win rate"""
+        if pd.isna(win_rate):
+            return 'dead'
+        elif win_rate < 0.4:
+            return 'dead'
+        elif win_rate < 0.55:
+            return 'fair'
+        else:
+            return 'fine'
+
+    def _get_combo_flag2(self, win_rate: float) -> str:
+        """Determine combo flag2 based on win rate"""
+        if pd.isna(win_rate):
+            return 'dead'
+        elif win_rate < 0.35:
+            return 'dead'
+        elif win_rate < 0.6:
+            return 'fair'
+        else:
+            return 'fine'
+
+    def calculate_combo_flags(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate combo flags and is_bad_combo based on historical win rates"""
+        try:
+            df = df.copy()
+            
+            # Initialize combo flags
+            for flag in ['dead', 'fair', 'fine']:
+                df[f'combo_flag_{flag}'] = 0.0
+                df[f'combo_flag2_{flag}'] = 0.0
+            
+            df['is_bad_combo'] = 0
+            
+            if len(df) == 0:
+                return df
+            
+            # Get current row
+            current_row = df.iloc[-1]
+            
+            # Calculate combo key and lookup win rate
+            combo_key = self._get_combo_key(current_row)
+            win_rate1 = self.combo_dict.get(combo_key, 0.0)
+            combo_flag = self._get_combo_flag(win_rate1)
+            
+            # Calculate combo key2 and lookup win rate
+            combo_key2 = self._get_combo_key2(current_row)
+            win_rate2 = self.combo2_dict.get(combo_key2, 0.0)
+            combo_flag2 = self._get_combo_flag2(win_rate2)
+            
+            # Set combo flags
+            df.loc[df.index[-1], f'combo_flag_{combo_flag}'] = 1.0
+            df.loc[df.index[-1], f'combo_flag2_{combo_flag2}'] = 1.0
+            
+            # Set is_bad_combo (1 if either combo is dead)
+            if combo_flag == 'dead' or combo_flag2 == 'dead':
+                df.loc[df.index[-1], 'is_bad_combo'] = 1
+            
+            # Store combo keys for debugging
+            df.loc[df.index[-1], 'combo_key'] = combo_key
+            df.loc[df.index[-1], 'combo_key2'] = combo_key2
+            
+            logger.debug(f"Combo key: {combo_key}, win rate: {win_rate1:.3f}, flag: {combo_flag}")
+            logger.debug(f"Combo key2: {combo_key2}, win rate: {win_rate2:.3f}, flag: {combo_flag2}")
+            logger.debug(f"Is bad combo: {df['is_bad_combo'].iloc[-1]}")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error in calculate_combo_flags: {str(e)}")
+            return df
+
+    def calculate_one_hot_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate one-hot encoded features"""
         try:
             df = df.copy()
@@ -1593,6 +979,15 @@ class FeatureEngineer:
             for session in sessions:
                 df[f'session_{session}'] = (df['session'] == session).astype(float)
             
+            # Minutes one-hot encoding (timeframe-specific)
+            if self.timeframe == '15m':
+                minute_categories = ['0', '15', '30', '45']
+            else:  # 5m
+                minute_categories = ['0', '5', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55']
+            
+            for minute in minute_categories:
+                df[f'minutes,closed_{minute}'] = (df['minute_bin'] == minute).astype(float)
+            
             # RSI zone calculation and one-hot encoding
             conditions = [
                 df["rsi"].isna(),
@@ -1602,18 +997,11 @@ class FeatureEngineer:
             choices = ["unknown", "oversold", "overbought"]
             df["rsi_zone"] = np.select(conditions, choices, default="neutral")
             
-            rsi_zones = ['neutral', 'overbought', 'oversold']
+            rsi_zones = ['neutral', 'overbought', 'oversold', 'unknown']
             for zone in rsi_zones:
                 df[f'rsi_zone_{zone}'] = (df['rsi_zone'] == zone).astype(float)
             
-            # Trend direction calculation and one-hot encoding
-            conditions = [
-                df['trend_strength_up'] > df['trend_strength_down'],
-                df['trend_strength_down'] > df['trend_strength_up']
-            ]
-            choices = ['uptrend', 'downtrend']
-            df['trend_direction'] = np.select(conditions, choices, default='sideways')
-            
+            # Trend direction one-hot encoding
             trend_directions = ['downtrend', 'sideways', 'uptrend']
             for direction in trend_directions:
                 df[f'trend_direction_{direction}'] = (df['trend_direction'] == direction).astype(float)
@@ -1624,62 +1012,13 @@ class FeatureEngineer:
             df['trade_type_BUY'] = (df.get('trade_type', '') == 'BUY').astype(float)
             df['trade_type_SELL'] = (df.get('trade_type', '') == 'SELL').astype(float)
             
-            # RSI bin one-hot encoding
-            rsi_bin_ranges = ['(0, 20]', '(20, 30]', '(30, 40]', '(40, 50]', '(50, 60]', '(60, 70]', '(70, 80]', '(80, 100]']
-            for bin_range in rsi_bin_ranges:
-                df[f'rsi_bin_{bin_range}'] = (df['rsi_bin'].astype(str) == bin_range).astype(float)
-            
-            # Combo key one-hot encoding
-            combo_key_patterns = self._get_combo_key_features()
-            for pattern in combo_key_patterns:
-                df[pattern] = 0.0  # Placeholder - would need actual combo key logic
-            
-            # Combo flag one-hot encoding
-            for flag in ['dead', 'fair', 'fine']:
-                df[f'combo_flag_{flag}'] = 0.0  # Placeholder
-            
-            # MACD z-bin one-hot encoding
-            macd_bins = ['0', '(-0.12, 0.126]', '(-0.489, -0.12]', '(-13.256, -0.489]', '(0.126, 0.517]', '(0.517, 10.271]']
-            for bin_val in macd_bins:
-                df[f'macd_z_bin_{bin_val}'] = (df['macd_z_bin'].astype(str) == bin_val).astype(float)
-            
-            # Combo key2 one-hot encoding
-            combo_key2_patterns = self._get_combo_key2_features()
-            for pattern in combo_key2_patterns:
-                df[pattern] = 0.0  # Placeholder
-            
-            # Combo flag2 one-hot encoding
-            for flag in ['dead', 'fair', 'fine']:
-                df[f'combo_flag2_{flag}'] = 0.0  # Placeholder
-            
             return df
             
         except Exception as e:
             logger.error(f"Error in calculate_one_hot_features: {str(e)}")
             return df
 
-    def generate_combo_features(self, df):
-        """Generate the 200+ combo interaction features"""
-        try:
-            # Initialize all combo features to 0
-            combo_features = self._get_combo_features()
-            for feature in combo_features:
-                df[feature] = 0.0
-            
-            # Calculate average win rate based on active combos
-            average_win_rate = self.calculate_average_combo_win_rate(df)
-            df['average_combo_win_rate'] = average_win_rate
-            
-            # Placeholder for is_bad_combo
-            df['is_bad_combo'] = 0
-            
-            return df, average_win_rate
-            
-        except Exception as e:
-            logger.error(f"Error in generate_combo_features: {str(e)}")
-            return df, 0.0
-
-    def generate_features(self, df, signal_type):
+    def generate_features(self, df: pd.DataFrame, signal_type: str) -> Optional[pd.Series]:
         """Main feature generation pipeline - returns features in EXACT order"""
         try:
             if len(df) < 200:
@@ -1700,9 +1039,13 @@ class FeatureEngineer:
                 self.calculate_trend_indicators,
                 lambda x: self.calculate_trade_features(x, signal_type),
                 self.calculate_candle_metrics,
+                self.calculate_advanced_time_features,
                 self.calculate_session_time_features,
+                self.calculate_volume_bins,
+                self.calculate_ratio_features,
                 self.create_bins,
                 self.calculate_one_hot_features,
+                self.calculate_combo_flags
             ]
             
             for step in pipeline:
@@ -1711,20 +1054,10 @@ class FeatureEngineer:
                     logger.error("Pipeline step returned None")
                     return None
             
-            # Generate combo features and get average win rate
-            df, average_win_rate = self.generate_combo_features(df)
-            
-            # Check if average combo win rate is above 30%
-            if average_win_rate <= 0.3:
-                logger.warning(f"Average combo win rate {average_win_rate:.4f} is not above 30% - breaking")
-                return None
-            
-            logger.info(f"Average combo win rate {average_win_rate:.4f} is above 30% - proceeding")
-            
             # Create final feature vector in EXACT order
-            features = pd.Series(index=self.features, dtype=float)
+            features = pd.Series(index=self.feature_columns, dtype=float)
             
-            for feat in self.features:
+            for feat in self.feature_columns:
                 if feat in df.columns:
                     value = df[feat].iloc[-1]
                     if pd.isna(value):
@@ -1739,19 +1072,188 @@ class FeatureEngineer:
                     features[feat] = 0.0
             
             # Validate all features are present
-            missing_features = set(self.features) - set(features.index)
+            missing_features = set(self.feature_columns) - set(features.index)
             if missing_features:
                 logger.warning(f"Missing features: {missing_features}")
                 for feat in missing_features:
                     features[feat] = 0.0
             
-            logger.debug(f"Feature generation successful: {len(features)} features")
-            return features[self.features]  # Ensure exact order
+            logger.debug(f"Feature generation successful: {len(features)} features for {self.timeframe}")
+            logger.debug(f"Combo flags: dead={features['combo_flag_dead']}, fair={features['combo_flag_fair']}, fine={features['combo_flag_fine']}")
+            logger.debug(f"Combo flags2: dead={features['combo_flag2_dead']}, fair={features['combo_flag2_fair']}, fine={features['combo_flag2_fine']}")
+            logger.debug(f"Is bad combo: {features['is_bad_combo']}")
+            
+            return features[self.feature_columns]  # Ensure exact order
             
         except Exception as e:
             logger.error(f"Error in generate_features: {str(e)}")
             logger.error(traceback.format_exc())
             return None
+
+
+# SHIFTING PROCEDURE AFTER FEATURE GENERATION
+def shift_features_after_generation(x: pd.DataFrame) -> pd.DataFrame:
+    """
+    Shift features after generation to use previous candle's data for prediction
+    
+    Args:
+        x: DataFrame with generated features
+        
+    Returns:
+        DataFrame with shifted features
+    """
+    try:
+        # 1️⃣ Your current dataframe columns
+        available_cols = x.columns.tolist()
+
+        # 2️⃣ Your intended columns to shift
+        shi = ['adj close',
+         'garman_klass_vol',
+         'rsi_20',
+         'bb_low',
+         'bb_mid',
+         'bb_high',
+         'atr_z',
+         'macd_line',
+         'macd_z',
+         'ma_10',
+         'ma_100',
+         'vwap',
+         'vwap_std',
+         'upper_band_1',
+         'lower_band_1',
+         'upper_band_2',
+         'lower_band_2',
+         'upper_band_3',
+         'lower_band_3',
+         'touches_vwap',
+         'touches_upper_band_1',
+         'touches_upper_band_2',
+         'touches_upper_band_3',
+         'touches_lower_band_1',
+         'touches_lower_band_2',
+         'touches_lower_band_3',
+         'far_ratio_vwap',
+         'far_ratio_upper_band_1',
+         'far_ratio_upper_band_2',
+         'far_ratio_upper_band_3',
+         'far_ratio_lower_band_1',
+         'far_ratio_lower_band_2',
+         'far_ratio_lower_band_3',
+         'session',
+         'rsi',
+         'rsi_zone',
+         'ma_20',
+         'ma_30',
+         'ma_40',
+         'ma_60',
+         'bearish_stack',
+         'trend_strength_up',
+         'trend_strength_down',
+         'trend_direction',
+         'prev_volume',
+         'body_size',
+         'wick_up',
+         'wick_down',
+         'prev_body_size',
+         'prev_wick_up',
+         'prev_wick_down',
+         'rsi_bin',
+         'combo_key',
+         'is_bad_combo',
+         'combo_flag',
+         'macd_z_bin',
+         'combo_key2',
+         'combo_flag2',
+         'volume_bin',
+         'dollar_volume_bin',
+         'price_div_vol',
+         'rsi_div_macd',
+         'price_div_vwap',
+         'hour',
+         'month',
+         'dayofweek',
+         'is_weekend',
+         'hour_sin',
+         'hour_cos',
+         'dayofweek_sin',
+         'dayofweek_cos']
+
+        # 3️⃣ Keep only columns that exist in dataframe
+        shi_clean = [col for col in shi if col in available_cols]
+
+        # 4️⃣ Shift safely
+        x[shi_clean] = x[shi_clean].shift(1)
+        
+        logger.info(f"Successfully shifted {len(shi_clean)} features")
+        logger.debug(f"Shifted features: {shi_clean}")
+        
+        return x
+        
+    except Exception as e:
+        logger.error(f"Error in shift_features_after_generation: {str(e)}")
+        return x
+
+
+# USAGE EXAMPLE
+def complete_feature_generation_pipeline(df: pd.DataFrame, timeframe: str, signal_type: str) -> Optional[pd.DataFrame]:
+    """
+    Complete pipeline: generate features then shift them
+    
+    Args:
+        df: Input DataFrame with price data
+        timeframe: '15m' or '5m'
+        signal_type: 'BUY' or 'SELL'
+        
+    Returns:
+        DataFrame with generated and shifted features, or None if failed
+    """
+    try:
+        # Initialize feature engineer
+        feature_engineer = FeatureEngineer(timeframe)
+        
+        # Generate features for entire dataframe
+        features_list = []
+        for i in range(len(df)):
+            current_df = df.iloc[:i+1].copy() if i > 0 else df.iloc[:1].copy()
+            features = feature_engineer.generate_features(current_df, signal_type)
+            if features is not None:
+                features_list.append(features)
+        
+        if not features_list:
+            logger.error("No features generated")
+            return None
+        
+        # Create features DataFrame
+        features_df = pd.DataFrame(features_list)
+        features_df.index = df.index[:len(features_list)]
+        
+        # Apply shifting procedure
+        features_df = shift_features_after_generation(features_df)
+        
+        logger.info(f"Complete feature generation successful: {len(features_df)} rows, {len(features_df.columns)} features")
+        return features_df
+        
+    except Exception as e:
+        logger.error(f"Error in complete_feature_generation_pipeline: {str(e)}")
+        return None
+
+
+# SIMPLIFIED USAGE FOR SINGLE ROW
+def generate_single_row_features(df: pd.DataFrame, timeframe: str, signal_type: str) -> Optional[pd.Series]:
+    """
+    Generate features for single row (most recent candle)
+    
+    Args:
+        df: Input DataFrame with at least 200 rows
+        timeframe: '15m' or '5m'
+        signal_type: 'BUY' or 'SELL'
+        
+    Returns:
+        Series with features for single row
+    """
+    feature_engineer = FeatureEngineer(timeframe)
+    return feature_engineer.generate_features(df, signal_type)
 
 # ========================
 # ENHANCED MODEL LOADER WITH OVERCONFIDENCE DETECTION
