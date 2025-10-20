@@ -94,7 +94,7 @@ DEBUG_MODE = True
 MODEL_MIN_SIZE = 100 * 1024
 SCALER_MIN_SIZE = 2 * 1024
 
-# Prediction threshold (0.9140 for class 1)
+# Prediction threshold (0.9140 for class 1) - KEEPING AT 0.9 AS REQUESTED
 PREDICTION_THRESHOLD = 0.9140
 
 # Initialize logging with more verbosity
@@ -436,6 +436,92 @@ def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
     
     logger.error(f"Failed to fetch candles after {max_attempts} attempts")
     return pd.DataFrame()
+
+# ========================
+# CRT PATTERN DETECTION
+# ========================
+def calculate_crt_vectorized(df):
+    """Vectorized implementation of CRT signal calculation"""
+    df = df.copy()
+    df['crt'] = None
+
+    # Shifted columns for previous candles
+    df['c1_low'] = df['low'].shift(2)
+    df['c1_high'] = df['high'].shift(2)
+    df['c2_low'] = df['low'].shift(1)
+    df['c2_high'] = df['high'].shift(1)
+    df['c2_close'] = df['close'].shift(1)
+
+    # Candle metrics
+    df['c2_range'] = df['c2_high'] - df['c2_low']
+    df['c2_mid'] = df['c2_low'] + 0.5 * df['c2_range']
+
+    # Vectorized conditions
+    buy_mask = (df['c2_low'] < df['c1_low']) & (df['c2_close'] > df['c1_low']) & (df['open'] > df['c2_mid'])
+    sell_mask = (df['c2_high'] > df['c1_high']) & (df['c2_close'] < df['c1_high']) & (df['open'] < df['c2_mid'])
+
+    df.loc[buy_mask, 'crt'] = 'BUY'
+    df.loc[sell_mask, 'crt'] = 'SELL'
+
+    # Cleanup
+    df.drop(columns=['c1_low', 'c1_high', 'c2_low', 'c2_high', 'c2_close', 'c2_range', 'c2_mid'], inplace=True)
+
+    return df
+
+def detect_crt_signals(df):
+    """Detect CRT signals in the dataframe"""
+    try:
+        if len(df) < 3:
+            return None, None
+        
+        # Calculate CRT signals
+        df_with_crt = calculate_crt_vectorized(df)
+        
+        # Get the latest signal
+        latest_signal = df_with_crt.iloc[-1]['crt']
+        
+        if pd.isna(latest_signal):
+            return None, None
+        
+        current = df_with_crt.iloc[-1]
+        
+        # Calculate stop loss and take profit based on signal type
+        if latest_signal == 'BUY':
+            sl = current['low'] - (current['high'] - current['low']) * 0.5
+            risk = abs(current['close'] - sl)
+            tp = current['close'] + (2 * risk)
+            
+            signal_data = {
+                'time': current['time'],
+                'entry': current['close'],
+                'sl': sl,
+                'tp': tp,
+                'signal_type': 'CRT_BUY',
+                'strength': 1.0
+            }
+            
+        elif latest_signal == 'SELL':
+            sl = current['high'] + (current['high'] - current['low']) * 0.5
+            risk = abs(current['close'] - sl)
+            tp = current['close'] - (2 * risk)
+            
+            signal_data = {
+                'time': current['time'],
+                'entry': current['close'],
+                'sl': sl,
+                'tp': tp,
+                'signal_type': 'CRT_SELL',
+                'strength': 1.0
+            }
+        else:
+            return None, None
+        
+        logger.info(f"CRT signal detected: {latest_signal} at {current['close']:.2f}")
+        return latest_signal, signal_data
+        
+    except Exception as e:
+        logger.error(f"CRT signal detection failed: {str(e)}")
+        return None, None
 
 # ========================
 # FIXED MODEL LOADER WITH DIMENSION HANDLING
@@ -827,7 +913,7 @@ class SimpleGoogleSheetsStorage:
             return False
 
 # ========================
-# WORKING TRADING BOT
+# WORKING TRADING BOT WITH CRT PATTERN
 # ========================
 class WorkingTradingBot:
     def __init__(self, timeframe, credentials):
@@ -901,48 +987,8 @@ class WorkingTradingBot:
         return next_time
 
     def detect_simple_signal(self, data):
-        """Simple signal detection based on basic patterns"""
-        try:
-            if len(data) < 3:
-                return None, None
-            
-            current = data.iloc[-1]
-            prev1 = data.iloc[-2]
-            prev2 = data.iloc[-3]
-            
-            # Simple breakout detection
-            if (current['close'] > prev1['high'] and 
-                current['close'] > max(prev1['high'], prev2['high'])):
-                sl = prev1['low']
-                risk = abs(current['close'] - sl)
-                tp = current['close'] + (2 * risk)
-                return 'BUY', {
-                    'time': current['time'],
-                    'entry': current['close'],
-                    'sl': sl,
-                    'tp': tp,
-                    'signal_type': 'BREAKOUT'
-                }
-            
-            # Simple breakdown detection
-            elif (current['close'] < prev1['low'] and 
-                  current['close'] < min(prev1['low'], prev2['low'])):
-                sl = prev1['high']
-                risk = abs(current['close'] - sl)
-                tp = current['close'] - (2 * risk)
-                return 'SELL', {
-                    'time': current['time'],
-                    'entry': current['close'],
-                    'sl': sl,
-                    'tp': tp,
-                    'signal_type': 'BREAKDOWN'
-                }
-            
-            return None, None
-            
-        except Exception as e:
-            logger.error(f"Signal detection failed: {str(e)}")
-            return None, None
+        """Use CRT pattern detection for signals"""
+        return detect_crt_signals(data)
 
     def send_signal(self, signal_type, signal_data, prediction, features):
         """Send formatted signal"""
@@ -1072,11 +1118,11 @@ class WorkingTradingBot:
                 self.data = new_data
                 logger.debug(f"Data updated: {len(self.data)} candles")
                 
-                # Detect signal
+                # Detect signal using CRT pattern
                 signal_type, signal_data = self.detect_simple_signal(self.data)
                 
                 if signal_type:
-                    logger.info(f"Signal detected: {signal_type}")
+                    logger.info(f"CRT Signal detected: {signal_type}")
                     
                     # Generate features
                     features = self.feature_engineer.generate_features(self.data, signal_type)
@@ -1089,15 +1135,15 @@ class WorkingTradingBot:
                             prediction = 0.5  # Neutral prediction for dummy model
                             logger.info("Using dummy prediction: 0.5")
                         
-                        # Send signal if confidence is reasonable
-                        if prediction > 0.9:  # Lower threshold to catch more signals
+                        # Send signal if confidence is high (0.9 threshold maintained)
+                        if prediction > PREDICTION_THRESHOLD:
                             self.send_signal(signal_type, signal_data, prediction, features)
                         else:
                             logger.info(f"Signal below threshold: {prediction:.4f}")
                     
                     consecutive_errors = 0
                 else:
-                    logger.debug("No signal detected")
+                    logger.debug("No CRT signal detected")
                     consecutive_errors = 0
                 
                 # Reset error count on success
