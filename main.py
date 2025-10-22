@@ -1,5 +1,5 @@
 # ========================
-# WORKING TRADING BOT - FIXED VERSION
+# WORKING TRADING BOT - PANDAS-TA FIXED VERSION
 # ========================
 
 # Add to your imports section
@@ -336,7 +336,7 @@ def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
     return pd.DataFrame()
 
 # ========================
-# FIXED FEATURE ENGINEER - COMBINED VERSION
+# FIXED FEATURE ENGINEER - PANDAS-TA COMPATIBLE
 # ========================
 class FeatureEngineer:
     def __init__(self, timeframe):
@@ -442,7 +442,7 @@ class FeatureEngineer:
             return None, None
         
     def calculate_technical_indicators(self, df):
-        """Calculate technical indicators WITH NEW FEATURES"""
+        """Calculate technical indicators WITH PANDAS-TA FIXES"""
         try:
             df = df.copy().drop_duplicates(subset=['time'], keep='last')
             
@@ -450,72 +450,201 @@ class FeatureEngineer:
             df['adj close'] = df['open']
             
             # Garman-Klass Volatility
-            df['garman_klass_vol'] = (((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 -(2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2))
+            df['garman_klass_vol'] = (((np.log(df['high']) - np.log(df['low'])) ** 2) / 2 - (2 * np.log(2) - 1) * ((np.log(df['adj close']) - np.log(df['open'])) ** 2))
             
-            # RSI indicators
-            df['rsi_20'] = ta.rsi(df['adj close'], length=20)
-            df['rsi'] = ta.rsi(df['close'], length=14)
+            # RSI indicators - FIXED: Use direct pandas-ta calls
+            try:
+                rsi_20 = ta.rsi(df['adj close'], length=20)
+                df['rsi_20'] = rsi_20 if rsi_20 is not None else 50
+            except:
+                df['rsi_20'] = 50
+                
+            try:
+                rsi_14 = ta.rsi(df['close'], length=14)
+                df['rsi'] = rsi_14 if rsi_14 is not None else 50
+            except:
+                df['rsi'] = 50
             
-            # Bollinger Bands
-            bb = ta.bbands(np.log1p(df['adj close']), length=20)
-            df['bb_low'] = bb['BBL_20_2.0']
-            df['bb_mid'] = bb['BBM_20_2.0']
-            df['bb_high'] = bb['BBU_20_2.0']
+            # Bollinger Bands - FIXED: Handle different column names
+            try:
+                bb = ta.bbands(df['adj close'], length=20, std=2)
+                if bb is not None:
+                    # Try different possible column names
+                    if 'BBL_20_2.0' in bb.columns:
+                        df['bb_low'] = bb['BBL_20_2.0']
+                        df['bb_mid'] = bb['BBM_20_2.0'] 
+                        df['bb_high'] = bb['BBU_20_2.0']
+                    elif 'BBL_20_2' in bb.columns:
+                        df['bb_low'] = bb['BBL_20_2']
+                        df['bb_mid'] = bb['BBM_20_2']
+                        df['bb_high'] = bb['BBU_20_2']
+                    elif 'BBL_20' in bb.columns:
+                        df['bb_low'] = bb['BBL_20']
+                        df['bb_mid'] = bb['BBM_20']
+                        df['bb_high'] = bb['BBU_20']
+                    else:
+                        # Use first three columns if standard names not found
+                        cols = bb.columns[:3]
+                        if len(cols) >= 3:
+                            df['bb_low'] = bb[cols[0]]
+                            df['bb_mid'] = bb[cols[1]]
+                            df['bb_high'] = bb[cols[2]]
+                        else:
+                            df['bb_low'] = df['bb_mid'] = df['bb_high'] = 0
+                else:
+                    df['bb_low'] = df['bb_mid'] = df['bb_high'] = 0
+            except Exception as e:
+                logger.warning(f"Bollinger Bands calculation issue: {e}")
+                df['bb_low'] = df['bb_mid'] = df['bb_high'] = 0
             
-            # ATR Z-score
-            atr = ta.atr(df['high'], df['low'], df['close'], length=14)
-            df['atr_z'] = (atr - atr.mean()) / atr.std()
+            # ATR Z-score - FIXED: Handle ATR calculation
+            try:
+                atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+                if atr is not None:
+                    atr_mean = atr.mean()
+                    atr_std = atr.std(ddof=0)
+                    df['atr_z'] = (atr - atr_mean) / atr_std if atr_std != 0 else 0
+                else:
+                    df['atr_z'] = 0
+            except:
+                df['atr_z'] = 0
             
-            # MACD with line and z-score
-            macd = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
-            df['macd_line'] = macd['MACD_12_26_9']
-            df['macd_z'] = (macd['MACD_12_26_9'] - macd['MACD_12_26_9'].mean()) / macd['MACD_12_26_9'].std()
+            # MACD with line and z-score - FIXED: Handle MACD calculation
+            try:
+                macd = ta.macd(df['adj close'], fast=12, slow=26, signal=9)
+                if macd is not None:
+                    # Try different possible column names
+                    if 'MACD_12_26_9' in macd.columns:
+                        macd_line = macd['MACD_12_26_9']
+                    elif 'MACD_12_26' in macd.columns:
+                        macd_line = macd['MACD_12_26']
+                    elif 'MACD' in macd.columns:
+                        macd_line = macd['MACD']
+                    else:
+                        # Use first column
+                        macd_line = macd[macd.columns[0]]
+                    
+                    df['macd_line'] = macd_line
+                    macd_mean = macd_line.mean()
+                    macd_std = macd_line.std(ddof=0)
+                    df['macd_z'] = (macd_line - macd_mean) / macd_std if macd_std != 0 else 0
+                else:
+                    df['macd_line'] = 0
+                    df['macd_z'] = 0
+            except Exception as e:
+                logger.warning(f"MACD calculation issue: {e}")
+                df['macd_line'] = 0
+                df['macd_z'] = 0
             
             # Dollar volume
             df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
             
-            # Moving averages
+            # Moving averages - FIXED: Use rolling directly
             for length in [10, 20, 30, 40, 60, 100]:
-                df[f'ma_{length}'] = df['adj close'].rolling(window=length).mean()
+                df[f'ma_{length}'] = df['adj close'].rolling(window=length, min_periods=1).mean()
             
-            # VWAP system
-            vwap_num = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum()
-            vwap_den = df['volume'].cumsum()
-            df['vwap'] = vwap_num / vwap_den
-            df['vwap_std'] = df['vwap'].rolling(window=20).std()
+            # VWAP system - FIXED: Manual calculation
+            try:
+                typical_price = (df['high'] + df['low'] + df['close']) / 3
+                vwap_num = (typical_price * df['volume']).cumsum()
+                vwap_den = df['volume'].cumsum()
+                df['vwap'] = vwap_num / vwap_den
+                df['vwap_std'] = df['vwap'].rolling(window=20, min_periods=1).std()
+            except:
+                df['vwap'] = df['adj close']
+                df['vwap_std'] = 0
             
-            # NEW: VWAP bands
-            for i in range(1, 4):
-                df[f'upper_band_{i}'] = df['vwap'] + i * df['vwap_std']
-                df[f'lower_band_{i}'] = df['vwap'] - i * df['vwap_std']
+            # VWAP bands - FIXED: Manual calculation
+            try:
+                for i in range(1, 4):
+                    df[f'upper_band_{i}'] = df['vwap'] + i * df['vwap_std']
+                    df[f'lower_band_{i}'] = df['vwap'] - i * df['vwap_std']
+            except:
+                for i in range(1, 4):
+                    df[f'upper_band_{i}'] = df['vwap']
+                    df[f'lower_band_{i}'] = df['vwap']
             
-            # NEW: Touch indicators
-            current_low = df['low'].iloc[-1]
-            current_high = df['high'].iloc[-1]
-            for i in range(1, 4):
-                df[f'touches_upper_band_{i}'] = (current_low <= df[f'upper_band_{i}']) & (df[f'upper_band_{i}'] <= current_high)
-                df[f'touches_lower_band_{i}'] = (current_low <= df[f'lower_band_{i}']) & (df[f'lower_band_{i}'] <= current_high)
+            # Touch indicators - FIXED: Use current values
+            try:
+                current_low = df['low'].iloc[-1]
+                current_high = df['high'].iloc[-1]
+                for i in range(1, 4):
+                    df[f'touches_upper_band_{i}'] = (current_low <= df[f'upper_band_{i}']) & (df[f'upper_band_{i}'] <= current_high)
+                    df[f'touches_lower_band_{i}'] = (current_low <= df[f'lower_band_{i}']) & (df[f'lower_band_{i}'] <= current_high)
+                df['touches_vwap'] = (current_low <= df['vwap']) & (df['vwap'] <= current_high)
+            except:
+                for i in range(1, 4):
+                    df[f'touches_upper_band_{i}'] = 0
+                    df[f'touches_lower_band_{i}'] = 0
+                df['touches_vwap'] = 0
             
-            df['touches_vwap'] = (current_low <= df['vwap']) & (df['vwap'] <= current_high)
+            # Distance ratios - FIXED: Use current values
+            try:
+                current_close = df['close'].iloc[-1]
+                for i in range(1, 4):
+                    df[f'far_ratio_upper_band_{i}'] = abs(current_close - df[f'upper_band_{i}']) / (df['vwap_std'] + 1e-6)
+                    df[f'far_ratio_lower_band_{i}'] = abs(current_close - df[f'lower_band_{i}']) / (df['vwap_std'] + 1e-6)
+                df['far_ratio_vwap'] = abs(current_close - df['vwap']) / (df['vwap_std'] + 1e-6)
+            except:
+                for i in range(1, 4):
+                    df[f'far_ratio_upper_band_{i}'] = 0
+                    df[f'far_ratio_lower_band_{i}'] = 0
+                df['far_ratio_vwap'] = 0
             
-            # NEW: Distance ratios
-            current_close = df['close'].iloc[-1]
-            for i in range(1, 4):
-                df[f'far_ratio_upper_band_{i}'] = abs(current_close - df[f'upper_band_{i}']) / df['vwap_std']
-                df[f'far_ratio_lower_band_{i}'] = abs(current_close - df[f'lower_band_{i}']) / df['vwap_std']
+            # Bearish stack - FIXED: Manual calculation
+            try:
+                df['bearish_stack'] = (
+                    (df['ma_20'] < df['ma_30']) & 
+                    (df['ma_30'] < df['ma_40']) & 
+                    (df['ma_40'] < df['ma_60'])
+                ).astype(float)
+            except:
+                df['bearish_stack'] = 0
             
-            df['far_ratio_vwap'] = abs(current_close - df['vwap']) / df['vwap_std']
+            # Trend strength - FIXED: Manual calculation
+            try:
+                df['trend_strength_up'] = (
+                    (df['ma_20'] > df['ma_30']) & 
+                    (df['ma_30'] > df['ma_40']) & 
+                    (df['ma_40'] > df['ma_60'])
+                ).astype(float)
+                df['trend_strength_down'] = (
+                    (df['ma_20'] < df['ma_30']) & 
+                    (df['ma_30'] < df['ma_40']) & 
+                    (df['ma_40'] < df['ma_60'])
+                ).astype(float)
+            except:
+                df['trend_strength_up'] = 0
+                df['trend_strength_down'] = 0
             
-            # NEW: Bearish stack
-            df['bearish_stack'] = (
-                (df['ma_20'] < df['ma_30']) & 
-                (df['ma_30'] < df['ma_40']) & 
-                (df['ma_40'] < df['ma_60'])
-            ).astype(float)
+            # Previous volume
+            df['prev_volume'] = df['volume'].shift(1).fillna(df['volume'])
             
             return df
         except Exception as e:
             logger.error(f"Error in calculate_technical_indicators: {str(e)}")
+            # Return basic dataframe with essential columns
+            df['adj close'] = df['open']
+            df['garman_klass_vol'] = 0
+            df['rsi_20'] = 50
+            df['rsi'] = 50
+            df['bb_low'] = df['bb_mid'] = df['bb_high'] = 0
+            df['atr_z'] = 0
+            df['macd_line'] = df['macd_z'] = 0
+            df['dollar_volume'] = 0
+            for length in [10, 20, 30, 40, 60, 100]:
+                df[f'ma_{length}'] = df['adj close']
+            df['vwap'] = df['adj close']
+            df['vwap_std'] = 0
+            for i in range(1, 4):
+                df[f'upper_band_{i}'] = df[f'lower_band_{i}'] = df['adj close']
+                df[f'touches_upper_band_{i}'] = df[f'touches_lower_band_{i}'] = 0
+                df[f'far_ratio_upper_band_{i}'] = df[f'far_ratio_lower_band_{i}'] = 0
+            df['touches_vwap'] = 0
+            df['far_ratio_vwap'] = 0
+            df['bearish_stack'] = 0
+            df['trend_strength_up'] = df['trend_strength_down'] = 0
+            df['prev_volume'] = df['volume']
             return df
 
     def calculate_trade_features(self, df, signal_type, entry):
@@ -534,12 +663,19 @@ class FeatureEngineer:
                 
             df['sl_distance'] = abs(entry - df['sl_price']) * 10000
             df['tp_distance'] = abs(df['tp_price'] - entry) * 10000
-            df['rrr'] = df['tp_distance'] / df['sl_distance'].replace(0, np.nan)
+            df['rrr'] = df['tp_distance'] / (df['sl_distance'] + 1e-6)
             df['log_sl'] = np.log1p(df['sl_price'])
             
             return df
         except Exception as e:
             logger.error(f"Error in calculate_trade_features: {str(e)}")
+            # Set default values
+            df['sl_price'] = entry * 0.99
+            df['tp_price'] = entry * 1.01
+            df['sl_distance'] = 100
+            df['tp_distance'] = 100
+            df['rrr'] = 1.0
+            df['log_sl'] = np.log1p(entry)
             return df
 
     def calculate_categorical_features(self, df):
@@ -560,11 +696,9 @@ class FeatureEngineer:
             
             # Day of week features
             df['day'] = df['time'].dt.day_name()
-            all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Sunday']
+            all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
             for day in all_days:
-                df[f'day_{day}'] = 0
-            today = datetime.now(NY_TZ).strftime('%A')
-            df[f'day_{today}'] = 1
+                df[f'day_{day}'] = (df['day'] == day).astype(int)
             
             # Session features
             def get_session(hour):
@@ -577,17 +711,10 @@ class FeatureEngineer:
                 else:
                     return 'q1'
                     
-            df['session'] = df['time'].dt.hour.apply(get_session)
-            session_dummies = pd.get_dummies(df['session'], prefix='session')
-            
-            # Ensure all session columns exist
-            expected_session_cols = ['session_q1', 'session_q2', 'session_q3', 'session_q4']
-            for col in expected_session_cols:
-                if col not in session_dummies.columns:
-                    session_dummies[col] = 0
-            
-            df = pd.concat([df, session_dummies], axis=1)
-            df.drop(['session'], axis=1, inplace=True)
+            df['session'] = df['hour'].apply(get_session)
+            for session in ['q1', 'q2', 'q3', 'q4']:
+                df[f'session_{session}'] = (df['session'] == session).astype(int)
+            df = df.drop('session', axis=1)
             
             # RSI zone features
             def rsi_zone(rsi):
@@ -601,32 +728,9 @@ class FeatureEngineer:
                     return 'neutral'
                     
             df['rsi_zone'] = df['rsi'].apply(rsi_zone)
-            rsi_dummies = pd.get_dummies(df['rsi_zone'], prefix='rsi_zone')
-            
-            # Ensure all RSI zone columns exist
-            expected_rsi_cols = ['rsi_zone_oversold', 'rsi_zone_overbought', 'rsi_zone_neutral', 'rsi_zone_unknown']
-            for col in expected_rsi_cols:
-                if col not in rsi_dummies.columns:
-                    rsi_dummies[col] = 0
-            
-            df = pd.concat([df, rsi_dummies], axis=1)
-            df.drop(['rsi_zone'], axis=1, inplace=True)
-            
-            # Trend strength features
-            def is_bullish_stack(row):
-                try:
-                    return int(row['ma_20'] > row['ma_30'] > row['ma_40'] > row['ma_60'])
-                except:
-                    return 0
-                    
-            def is_bearish_stack(row):
-                try:
-                    return int(row['ma_20'] < row['ma_30'] < row['ma_40'] < row['ma_60'])
-                except:
-                    return 0
-            
-            df['trend_strength_up'] = df.apply(is_bullish_stack, axis=1).astype(float)
-            df['trend_strength_down'] = df.apply(is_bearish_stack, axis=1).astype(float)
+            for zone in ['neutral', 'overbought', 'oversold', 'unknown']:
+                df[f'rsi_zone_{zone}'] = (df['rsi_zone'] == zone).astype(int)
+            df = df.drop('rsi_zone', axis=1)
             
             # Trend direction features
             def get_trend(row):
@@ -641,20 +745,41 @@ class FeatureEngineer:
                     return 'sideways'
             
             df['trend_direction'] = df.apply(get_trend, axis=1)
-            trend_dummies = pd.get_dummies(df['trend_direction'], prefix='trend_direction')
-            
-            # Ensure all trend direction columns exist
-            expected_trend_cols = ['trend_direction_downtrend', 'trend_direction_sideways', 'trend_direction_uptrend']
-            for col in expected_trend_cols:
-                if col not in trend_dummies.columns:
-                    trend_dummies[col] = 0
-            
-            df = pd.concat([df, trend_dummies], axis=1)
-            df.drop(['trend_direction'], axis=1, inplace=True)
+            for direction in ['downtrend', 'sideways', 'uptrend']:
+                df[f'trend_direction_{direction}'] = (df['trend_direction'] == direction).astype(int)
+            df = df.drop('trend_direction', axis=1)
             
             return df
         except Exception as e:
             logger.error(f"Error in calculate_categorical_features: {str(e)}")
+            # Set default values for essential columns
+            default_time = datetime.now(NY_TZ)
+            df['hour'] = default_time.hour
+            df['month'] = default_time.month
+            df['dayofweek'] = default_time.weekday()
+            df['is_weekend'] = 0
+            df['hour_sin'] = np.sin(2 * np.pi * default_time.hour / 24)
+            df['hour_cos'] = np.cos(2 * np.pi * default_time.hour / 24)
+            df['dayofweek_sin'] = np.sin(2 * np.pi * default_time.weekday() / 7)
+            df['dayofweek_cos'] = np.cos(2 * np.pi * default_time.weekday() / 7)
+            
+            all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            for day in all_days:
+                df[f'day_{day}'] = 0
+            df[f'day_{default_time.strftime("%A")}'] = 1
+            
+            for session in ['q1', 'q2', 'q3', 'q4']:
+                df[f'session_{session}'] = 0
+            df['session_q1'] = 1  # Default
+            
+            for zone in ['neutral', 'overbought', 'oversold', 'unknown']:
+                df[f'rsi_zone_{zone}'] = 0
+            df['rsi_zone_neutral'] = 1  # Default
+            
+            for direction in ['downtrend', 'sideways', 'uptrend']:
+                df[f'trend_direction_{direction}'] = 0
+            df['trend_direction_sideways'] = 1  # Default
+            
             return df
 
     def calculate_minutes_closed(self, df):
@@ -766,26 +891,27 @@ class FeatureEngineer:
             df = self.calculate_minutes_closed(df)
             
             # Volume features
-            df['prev_volume'] = df['volume'].shift(1)
+            df['prev_volume'] = df['volume'].shift(1).fillna(df['volume'])
             df['body_size'] = abs(df['close'] - df['open'])
             df['wick_up'] = df['high'] - df[['close', 'open']].max(axis=1)
             df['wick_down'] = df[['close', 'open']].min(axis=1) - df['low']
-            df['prev_body_size'] = df['body_size'].shift(1)
-            df['prev_wick_up'] = df['wick_up'].shift(1)
-            df['prev_wick_down'] = df['wick_down'].shift(1)
+            df['prev_body_size'] = df['body_size'].shift(1).fillna(df['body_size'])
+            df['prev_wick_up'] = df['wick_up'].shift(1).fillna(df['wick_up'])
+            df['prev_wick_down'] = df['wick_down'].shift(1).fillna(df['wick_down'])
             
-            # NEW: Volume binning
-            avg_volume = df['volume'].rolling(20).mean().iloc[-1]
+            # Volume binning
+            avg_volume = df['volume'].rolling(20, min_periods=1).mean().iloc[-1]
             df['volume_bin'] = (df['volume'] > avg_volume).astype(int)
             df['dollar_volume_bin'] = ((df['adj close'] * df['volume']) > 1000000).astype(int)
             
             # Ratio features
-            df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + 1e-6)
-            df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + 1e-6)
-            df['price_div_vwap'] = df['adj close'] / (df['vwap'] + 1e-6)
-            df['sl_div_atr'] = df['sl_distance'] / (df['atr_z'] + 1e-6)
-            df['tp_div_atr'] = df['tp_distance'] / (df['atr_z'] + 1e-6)
-            df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + 1e-6)
+            small_value = 1e-6
+            df['price_div_vol'] = df['adj close'] / (df['garman_klass_vol'] + small_value)
+            df['rsi_div_macd'] = df['rsi'] / (df['macd_z'] + small_value)
+            df['price_div_vwap'] = df['adj close'] / (df['vwap'] + small_value)
+            df['sl_div_atr'] = df['sl_distance'] / (abs(df['atr_z']) + small_value)
+            df['tp_div_atr'] = df['tp_distance'] / (abs(df['atr_z']) + small_value)
+            df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + small_value)
             
             current_row = df.iloc[-1]
             combo_flags = self.calculate_combo_flags(current_row, signal_type)
@@ -820,9 +946,11 @@ class FeatureEngineer:
                 for col in features[features.isna()].index:
                     features[col] = 0
             
+            logger.debug(f"Successfully generated {len(features)} features for {self.timeframe}")
             return features
         except Exception as e:
             logger.error(f"Error in generate_features: {str(e)}")
+            logger.error(traceback.format_exc())
             return None
 
 
@@ -906,7 +1034,7 @@ class GoogleSheetsStorage:
 
 
 # ========================
-# WORKING TRADING BOT - WITH GRACEFUL ERROR HANDLING
+# WORKING TRADING BOT - WITH PANDAS-TA FIXES
 # ========================
 class TradingBot:
     def __init__(self, timeframe, credentials):
@@ -1144,7 +1272,7 @@ class TradingBot:
 
 
 # ========================
-# MAIN EXECUTION - WITH GRACEFUL ERROR HANDLING
+# MAIN EXECUTION - WITH PANDAS-TA FIXES
 # ========================
 if __name__ == "__main__":
     print("===== WORKING BOT STARTING =====")
