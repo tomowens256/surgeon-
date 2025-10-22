@@ -686,169 +686,350 @@ class FixedModelLoader:
             return 0.5
 
 # ========================
-# SIMPLIFIED FEATURE ENGINEER
+# FIXED FEATURE ENGINEER WITH EXACT FEATURE LISTS
 # ========================
 class SimplifiedFeatureEngineer:
     def __init__(self, timeframe):
         self.timeframe = timeframe
         logger.debug(f"Initializing SimplifiedFeatureEngineer for {timeframe}")
         
-        # Define basic features - we'll generate what we can
-        self.basic_features = [
-            'open', 'high', 'low', 'close', 'volume',
-            'rsi', 'rsi_20', 'macd', 'macd_signal', 'macd_hist',
-            'ema_12', 'ema_26', 'sma_20', 'sma_50', 'sma_200',
-            'atr', 'bb_upper', 'bb_middle', 'bb_lower', 'bb_width',
-            'obv', 'vwap', 'stoch_k', 'stoch_d', 'williams_r',
-            'cci', 'adx', 'aroon_up', 'aroon_down', 'aroon_osc',
-            'mfi', 'roc', 'momentum', 'volume_change', 'price_change',
-            'body_size', 'upper_wick', 'lower_wick', 'body_ratio',
-            'high_low_ratio', 'open_close_ratio', 'volume_sma_ratio'
-        ]
+        # Define exact feature lists based on timeframe
+        if timeframe == 'M5':
+            self.all_features = [
+                'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
+                'atr_z', 'macd_line', 'macd_z', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
+                'upper_band_1', 'lower_band_1', 'upper_band_2', 'lower_band_2', 
+                'upper_band_3', 'lower_band_3', 'touches_vwap', 'touches_upper_band_1',
+                'touches_upper_band_2', 'touches_upper_band_3', 'touches_lower_band_1',
+                'touches_lower_band_2', 'touches_lower_band_3', 'far_ratio_vwap',
+                'far_ratio_upper_band_1', 'far_ratio_upper_band_2', 'far_ratio_upper_band_3',
+                'far_ratio_lower_band_1', 'far_ratio_lower_band_2', 'far_ratio_lower_band_3',
+                'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60', 'bearish_stack',
+                'trend_strength_up', 'trend_strength_down', 'sl_price', 'tp_price',
+                'prev_volume', 'body_size', 'wick_up', 'wick_down', 'sl_distance',
+                'tp_distance', 'log_sl', 'prev_body_size', 'prev_wick_up', 'prev_wick_down',
+                'result', 'is_bad_combo', 'volume_bin', 'dollar_volume_bin', 'price_div_vol',
+                'rsi_div_macd', 'price_div_vwap', 'sl_div_atr', 'tp_div_atr', 'rrr_div_rsi',
+                'hour', 'month', 'dayofweek', 'is_weekend', 'hour_sin', 'hour_cos',
+                'dayofweek_sin', 'dayofweek_cos', 'day_Friday', 'day_Monday', 'day_Sunday',
+                'day_Thursday', 'day_Tuesday', 'day_Wednesday', 'session_q1', 'session_q2',
+                'session_q3', 'session_q4', 'rsi_zone_neutral', 'rsi_zone_overbought',
+                'rsi_zone_oversold', 'rsi_zone_unknown', 'trend_direction_downtrend',
+                'trend_direction_sideways', 'trend_direction_uptrend', 'crt_BUY', 'crt_SELL',
+                'trade_type_BUY', 'trade_type_SELL', 'combo_flag_dead', 'combo_flag_fair',
+                'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine',
+                'minutes,closed_0', 'minutes,closed_5', 'minutes,closed_10', 'minutes,closed_15',
+                'minutes,closed_20', 'minutes,closed_25', 'minutes,closed_30', 'minutes,closed_35',
+                'minutes,closed_40', 'minutes,closed_45', 'minutes,closed_50', 'minutes,closed_55'
+            ]
+        else:  # M15
+            self.all_features = [
+                'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
+                'atr_z', 'macd_line', 'macd_z', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
+                'upper_band_1', 'lower_band_1', 'upper_band_2', 'lower_band_2', 
+                'upper_band_3', 'lower_band_3', 'touches_vwap', 'touches_upper_band_1',
+                'touches_upper_band_2', 'touches_upper_band_3', 'touches_lower_band_1',
+                'touches_lower_band_2', 'touches_lower_band_3', 'far_ratio_vwap',
+                'far_ratio_upper_band_1', 'far_ratio_upper_band_2', 'far_ratio_upper_band_3',
+                'far_ratio_lower_band_1', 'far_ratio_lower_band_2', 'far_ratio_lower_band_3',
+                'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60', 'bearish_stack',
+                'trend_strength_up', 'trend_strength_down', 'sl_price', 'tp_price',
+                'prev_volume', 'body_size', 'wick_up', 'wick_down', 'sl_distance',
+                'tp_distance', 'log_sl', 'prev_body_size', 'prev_wick_up', 'prev_wick_down',
+                'is_bad_combo', 'volume_bin', 'dollar_volume_bin', 'price_div_vol',
+                'rsi_div_macd', 'price_div_vwap', 'sl_div_atr', 'tp_div_atr', 'rrr_div_rsi',
+                'hour', 'month', 'dayofweek', 'is_weekend', 'hour_sin', 'hour_cos',
+                'dayofweek_sin', 'dayofweek_cos', 'day_Friday', 'day_Monday', 'day_Sunday',
+                'day_Thursday', 'day_Tuesday', 'day_Wednesday', 'session_q1', 'session_q2',
+                'session_q3', 'session_q4', 'rsi_zone_neutral', 'rsi_zone_overbought',
+                'rsi_zone_oversold', 'rsi_zone_unknown', 'trend_direction_downtrend',
+                'trend_direction_sideways', 'trend_direction_uptrend', 'crt_BUY', 'crt_SELL',
+                'trade_type_BUY', 'trade_type_SELL', 'combo_flag_dead', 'combo_flag_fair',
+                'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine',
+                'minutes,closed_0', 'minutes,closed_15', 'minutes,closed_30', 'minutes,closed_45'
+            ]
         
-        # Add time-based features
-        self.time_features = [
-            'hour', 'day_of_week', 'day_of_month', 'week_of_year', 'month',
-            'is_weekend', 'is_month_start', 'is_month_end', 'is_quarter_start', 'is_quarter_end',
-            'session_asia', 'session_london', 'session_ny', 'session_overlap'
-        ]
+        logger.info(f"Initialized {timeframe} feature engineer with {len(self.all_features)} target features")
         
-        self.all_features = self.basic_features + self.time_features
+        # Define columns that need to be shifted
+        self.columns_to_shift = [
+            'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
+            'atr_z', 'macd_line', 'macd_z', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
+            'upper_band_1', 'lower_band_1', 'upper_band_2', 'lower_band_2', 
+            'upper_band_3', 'lower_band_3', 'touches_vwap', 'touches_upper_band_1',
+            'touches_upper_band_2', 'touches_upper_band_3', 'touches_lower_band_1',
+            'touches_lower_band_2', 'touches_lower_band_3', 'far_ratio_vwap',
+            'far_ratio_upper_band_1', 'far_ratio_upper_band_2', 'far_ratio_upper_band_3',
+            'far_ratio_lower_band_1', 'far_ratio_lower_band_2', 'far_ratio_lower_band_3',
+            'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60', 'bearish_stack',
+            'trend_strength_up', 'trend_strength_down', 'prev_volume', 'body_size',
+            'wick_up', 'wick_down', 'prev_body_size', 'prev_wick_up', 'prev_wick_down',
+            'is_bad_combo', 'volume_bin', 'dollar_volume_bin', 'price_div_vol',
+            'rsi_div_macd', 'price_div_vwap', 'hour', 'month', 'dayofweek', 'is_weekend',
+            'hour_sin', 'hour_cos', 'dayofweek_sin', 'dayofweek_cos'
+        ]
     
     def generate_features(self, df: pd.DataFrame, signal_type: str) -> Optional[pd.Series]:
-        """Generate simplified features that match model expectations"""
+        """Generate all features that match model expectations"""
         try:
-            if len(df) < 50:
-                logger.warning("Not enough data for feature generation")
+            # Adjust minimum data requirement based on timeframe
+            min_data_required = 200 if self.timeframe in ['M5', 'M15'] else 100
+            if len(df) < min_data_required:
+                logger.warning(f"Not enough data for {self.timeframe} feature generation. Need {min_data_required}, got {len(df)}")
                 return None
             
+            # Create a copy and set index to 'time' for time-based calculations
+            df_copy = df.copy()
+            if 'time' in df_copy.columns:
+                df_copy.set_index('time', inplace=True)
+
             # Use the last row for current features
-            current_data = df.iloc[-1].copy()
+            current_data = df_copy.iloc[-1].copy()
             features = pd.Series(index=self.all_features, dtype=float)
             
-            # Basic price features
-            features['open'] = current_data['open']
-            features['high'] = current_data['high']
-            features['low'] = current_data['low']
-            features['close'] = current_data['close']
-            features['volume'] = current_data['volume']
-            
-            # Calculate basic technical indicators
-            self._calculate_technical_indicators(df, features)
+            # Calculate all technical indicators on the full dataframe first
+            self._calculate_all_technical_indicators(df_copy, features)
             
             # Calculate time-based features
-            self._calculate_time_features(current_data['time'], features)
+            timestamp = df_copy.index[-1] if hasattr(df_copy.index, '[-1]') else current_data.name
+            self._calculate_time_features(timestamp, features)
             
             # Calculate candle features
             self._calculate_candle_features(current_data, features)
             
+            # Calculate risk management features
+            self._calculate_risk_features(current_data, features)
+            
+            # Calculate ratio features
+            self._calculate_ratio_features(features)
+            
+            # Calculate categorical encodings
+            self._calculate_categorical_encodings(features, timestamp)
+            
+            # Set default values for trade-specific features
+            self._set_trade_defaults(features, signal_type, timestamp)
+            
             # Fill any missing values with 0
             features = features.fillna(0)
             
-            logger.debug(f"Generated {len(features)} simplified features")
+            # Apply column shifting logic before returning features
+            features = self._apply_column_shifting(features, df_copy)
+            
+            # Final validation - ensure we have exactly the right features
+            if len(features) != len(self.all_features):
+                logger.error(f"Feature count mismatch: expected {len(self.all_features)}, got {len(features)}")
+                # Create a new series with exact feature order
+                exact_features = pd.Series(index=self.all_features, dtype=float)
+                for feature in self.all_features:
+                    if feature in features:
+                        exact_features[feature] = features[feature]
+                    else:
+                        exact_features[feature] = 0.0
+                        logger.warning(f"Missing feature: {feature}")
+                features = exact_features
+            
+            logger.debug(f"Generated {len(features)} features for {self.timeframe}")
             return features
             
         except Exception as e:
-            logger.error(f"Simplified feature generation failed: {str(e)}")
+            logger.error(f"Feature generation failed for {self.timeframe}: {str(e)}")
             return None
     
-    def _calculate_technical_indicators(self, df, features):
-        """Calculate basic technical indicators"""
+    def _apply_column_shifting(self, features: pd.Series, df: pd.DataFrame) -> pd.Series:
+        """Apply column shifting logic to features"""
         try:
-            # RSI
+            # Create a copy of the features to modify
+            shifted_features = features.copy()
+            
+            # For live prediction, we simulate shifting by using previous values from df
+            # Since we're generating features for the current candle, we need to use values from previous candle
+            if len(df) >= 2:
+                for col in self.columns_to_shift:
+                    if col in df.columns:
+                        # Use the value from the previous candle (shifted value)
+                        shifted_features[col] = df[col].iloc[-2]
+                    elif col in shifted_features.index:
+                        # If column doesn't exist in df, we can't shift it properly
+                        # Keep the current value but log warning
+                        logger.warning(f"Column {col} not found in dataframe, cannot shift")
+            
+            logger.debug(f"Applied shifting to {len(self.columns_to_shift)} columns")
+            return shifted_features
+            
+        except Exception as e:
+            logger.error(f"Column shifting failed: {str(e)}")
+            return features  # Return original features if shifting fails
+    
+    def _calculate_all_technical_indicators(self, df, features):
+        """Calculate all technical indicators"""
+        try:
+            # Basic price features
+            features['adj close'] = df['close'].iloc[-1]
+            
+            # Garman-Klass Volatility
+            features['garman_klass_vol'] = (
+                0.5 * (np.log(df['high'].iloc[-1] / df['low'].iloc[-1]) ** 2)
+                - (2 * np.log(2) - 1) * (np.log(df['close'].iloc[-1] / df['open'].iloc[-1]) ** 2)
+            )
+            
+            # RSI indicators
+            features['rsi'] = ta.rsi(df['close'], length=14).iloc[-1] if len(df) >= 14 else 50
+            features['rsi_20'] = ta.rsi(df['close'], length=20).iloc[-1] if len(df) >= 20 else 50
+            
+            # Bollinger Bands (log adjusted close)
+            if len(df) >= 20:
+                bb = ta.bbands(np.log1p(df['close']), length=20, std=2)
+                if bb is not None and len(bb.columns) >= 3:
+                    features['bb_low'] = bb.iloc[-1, 0]
+                    features['bb_mid'] = bb.iloc[-1, 1]
+                    features['bb_high'] = bb.iloc[-1, 2]
+                else:
+                    features['bb_low'] = features['bb_mid'] = features['bb_high'] = 0
+            else:
+                features['bb_low'] = features['bb_mid'] = features['bb_high'] = 0
+            
+            # ATR Z-score
             if len(df) >= 14:
-                features['rsi'] = ta.rsi(df['close'], length=14).iloc[-1]
-                features['rsi_20'] = ta.rsi(df['close'], length=20).iloc[-1]
+                atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+                atr_mean = atr.mean()
+                atr_std = atr.std(ddof=0)
+                features['atr_z'] = (atr.iloc[-1] - atr_mean) / atr_std if atr_std != 0 else 0
+            else:
+                features['atr_z'] = 0
             
             # MACD
             if len(df) >= 26:
-                macd = ta.macd(df['close'])
-                if macd is not None:
-                    features['macd'] = macd['MACD_12_26_9'].iloc[-1] if 'MACD_12_26_9' in macd.columns else 0
-                    features['macd_signal'] = macd['MACDs_12_26_9'].iloc[-1] if 'MACDs_12_26_9' in macd.columns else 0
-                    features['macd_hist'] = macd['MACDh_12_26_9'].iloc[-1] if 'MACDh_12_26_9' in macd.columns else 0
+                macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
+                if macd is not None and 'MACD_12_26_9' in macd.columns:
+                    macd_line = macd['MACD_12_26_9']
+                    features['macd_line'] = macd_line.iloc[-1]
+                    macd_mean = macd_line.mean()
+                    macd_std = macd_line.std(ddof=0)
+                    features['macd_z'] = (macd_line.iloc[-1] - macd_mean) / macd_std if macd_std != 0 else 0
+                else:
+                    features['macd_line'] = 0
+                    features['macd_z'] = 0
+            else:
+                features['macd_line'] = 0
+                features['macd_z'] = 0
             
             # Moving averages
-            features['ema_12'] = ta.ema(df['close'], length=12).iloc[-1] if len(df) >= 12 else 0
-            features['ema_26'] = ta.ema(df['close'], length=26).iloc[-1] if len(df) >= 26 else 0
-            features['sma_20'] = ta.sma(df['close'], length=20).iloc[-1] if len(df) >= 20 else 0
-            features['sma_50'] = ta.sma(df['close'], length=50).iloc[-1] if len(df) >= 50 else 0
-            features['sma_200'] = ta.sma(df['close'], length=200).iloc[-1] if len(df) >= 200 else 0
+            for length in [10, 20, 30, 40, 60, 100]:
+                if len(df) >= length:
+                    features[f'ma_{length}'] = df['close'].rolling(window=length, min_periods=1).mean().iloc[-1]
+                else:
+                    features[f'ma_{length}'] = df['close'].iloc[-1]  # Use current price as fallback
             
-            # Bollinger Bands
-            if len(df) >= 20:
-                bb = ta.bbands(df['close'], length=20)
-                if bb is not None:
-                    features['bb_upper'] = bb['BBU_20_2.0'].iloc[-1] if 'BBU_20_2.0' in bb.columns else 0
-                    features['bb_middle'] = bb['BBM_20_2.0'].iloc[-1] if 'BBM_20_2.0' in bb.columns else 0
-                    features['bb_lower'] = bb['BBL_20_2.0'].iloc[-1] if 'BBL_20_2.0' in bb.columns else 0
-                    features['bb_width'] = (features['bb_upper'] - features['bb_lower']) / features['bb_middle'] if features['bb_middle'] != 0 else 0
+            # VWAP system
+            self._calculate_vwap_system(df, features)
             
-            # Other indicators
-            features['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14).iloc[-1] if len(df) >= 14 else 0
-            features['obv'] = ta.obv(df['close'], df['volume']).iloc[-1] if len(df) >= 1 else 0
+            # Trend strength indicators
+            features['bearish_stack'] = (
+                (features['ma_20'] < features['ma_30']) &
+                (features['ma_30'] < features['ma_40']) &
+                (features['ma_40'] < features['ma_60'])
+            ).astype(float)
             
-            # VWAP (simplified)
-            typical_price = (df['high'] + df['low'] + df['close']) / 3
-            vwap = (typical_price * df['volume']).cumsum() / df['volume'].cumsum()
-            features['vwap'] = vwap.iloc[-1] if len(vwap) > 0 else 0
+            features['trend_strength_up'] = (
+                (features['ma_20'] > features['ma_30']) &
+                (features['ma_30'] > features['ma_40']) &
+                (features['ma_40'] > features['ma_60'])
+            ).astype(float)
             
-            # Stochastic
-            if len(df) >= 14:
-                stoch = ta.stoch(df['high'], df['low'], df['close'])
-                if stoch is not None:
-                    features['stoch_k'] = stoch['STOCHk_14_3_3'].iloc[-1] if 'STOCHk_14_3_3' in stoch.columns else 0
-                    features['stoch_d'] = stoch['STOCHd_14_3_3'].iloc[-1] if 'STOCHd_14_3_3' in stoch.columns else 0
+            features['trend_strength_down'] = (
+                (features['ma_20'] < features['ma_30']) &
+                (features['ma_30'] < features['ma_40']) &
+                (features['ma_40'] < features['ma_60'])
+            ).astype(float)
             
-            features['williams_r'] = ta.willr(df['high'], df['low'], df['close'], length=14).iloc[-1] if len(df) >= 14 else 0
-            features['cci'] = ta.cci(df['high'], df['low'], df['close'], length=20).iloc[-1] if len(df) >= 20 else 0
-            features['adx'] = ta.adx(df['high'], df['low'], df['close'], length=14).iloc[-1] if len(df) >= 14 else 0
-            
-            # Aroon
-            if len(df) >= 25:
-                aroon = ta.aroon(df['high'], df['low'], length=25)
-                if aroon is not None:
-                    features['aroon_up'] = aroon['AROONU_25'].iloc[-1] if 'AROONU_25' in aroon.columns else 0
-                    features['aroon_down'] = aroon['AROOND_25'].iloc[-1] if 'AROOND_25' in aroon.columns else 0
-                    features['aroon_osc'] = features['aroon_up'] - features['aroon_down']
-            
-            features['mfi'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14).iloc[-1] if len(df) >= 14 else 0
-            features['roc'] = ta.roc(df['close'], length=10).iloc[-1] if len(df) >= 10 else 0
-            features['momentum'] = ta.mom(df['close'], length=10).iloc[-1] if len(df) >= 10 else 0
-            
-            # Volume and price changes
-            if len(df) >= 2:
-                features['volume_change'] = (df['volume'].iloc[-1] - df['volume'].iloc[-2]) / df['volume'].iloc[-2] if df['volume'].iloc[-2] != 0 else 0
-                features['price_change'] = (df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] if df['close'].iloc[-2] != 0 else 0
-                features['volume_sma_ratio'] = df['volume'].iloc[-1] / ta.sma(df['volume'], length=20).iloc[-1] if len(df) >= 20 else 1
+            # Previous volume
+            features['prev_volume'] = df['volume'].iloc[-2] if len(df) >= 2 else df['volume'].iloc[-1]
             
         except Exception as e:
             logger.error(f"Technical indicator calculation failed: {str(e)}")
+    
+    def _calculate_vwap_system(self, df, features):
+        """Calculate VWAP and band system with timeframe-aware session lengths"""
+        try:
+            # Use predefined session lengths based on timeframe
+            tf_to_session_hours = {
+                'M5': 8, 'M15': 24, 'M30': 48, 'H1': 96, 'H4': 384, 'D1': 2304
+            }
+            session_hours = tf_to_session_hours.get(self.timeframe, 24)  # Default to 24h
+            freq = f"{int(session_hours * 60)}min"
+            
+            # VWAP calculations
+            typical_price = (df['high'] + df['low'] + df['close']) / 3
+            price_volume = typical_price * df['volume']
+            
+            # Group by session
+            if hasattr(df.index, 'floor'):
+                group = df.index.floor(freq)
+            else:
+                # Fallback: use fixed intervals
+                group = pd.Series(df.index).apply(lambda x: x.replace(minute=0, second=0, microsecond=0)).values
+            
+            session_volume = df['volume'].groupby(group).cumsum()
+            session_price_volume = price_volume.groupby(group).cumsum()
+            
+            vwap = session_price_volume / session_volume
+            features['vwap'] = vwap.iloc[-1] if len(vwap) > 0 and not pd.isna(vwap.iloc[-1]) else df['close'].iloc[-1]
+            
+            # VWAP standard deviation
+            if len(vwap) > 0:
+                features['vwap_std'] = vwap.rolling(20, min_periods=1).std(ddof=0).iloc[-1]
+            else:
+                features['vwap_std'] = 0
+            
+            # Standard deviation for bands
+            deviation = (typical_price - vwap) ** 2
+            dev_vol = deviation * df['volume']
+            session_dev_vol = dev_vol.groupby(group).cumsum()
+            variance = session_dev_vol / session_volume
+            std = np.sqrt(variance)
+            current_std = std.iloc[-1] if len(std) > 0 and not pd.isna(std.iloc[-1]) else 0
+            
+            # Bands
+            for i in range(1, 4):
+                features[f'upper_band_{i}'] = features['vwap'] + i * current_std
+                features[f'lower_band_{i}'] = features['vwap'] - i * current_std
+            
+            # Touch indicators
+            levels = ["vwap"] + [f"upper_band_{i}" for i in range(1, 4)] + [f"lower_band_{i}" for i in range(1, 4)]
+            current_low = df['low'].iloc[-1]
+            current_high = df['high'].iloc[-1]
+            
+            for lvl in levels:
+                level_value = features[lvl]
+                features[f'touches_{lvl}'] = 1 if (current_low <= level_value <= current_high) else 0
+            
+            # Distance ratios
+            current_close = df['close'].iloc[-1]
+            for lvl in levels:
+                level_value = features[lvl]
+                dist = abs(current_close - level_value)
+                features[f'far_ratio_{lvl}'] = dist / current_std if current_std > 0 else 0
+                
+        except Exception as e:
+            logger.error(f"VWAP system calculation failed: {str(e)}")
     
     def _calculate_time_features(self, timestamp, features):
         """Calculate time-based features"""
         try:
             if isinstance(timestamp, str):
-                timestamp = parse_oanda_time(timestamp)
+                timestamp = pd.to_datetime(timestamp)
             
+            # Basic time features
             features['hour'] = timestamp.hour
-            features['day_of_week'] = timestamp.weekday()
-            features['day_of_month'] = timestamp.day
-            features['week_of_year'] = timestamp.isocalendar()[1]
             features['month'] = timestamp.month
-            
+            features['dayofweek'] = timestamp.weekday()
             features['is_weekend'] = 1 if timestamp.weekday() >= 5 else 0
-            features['is_month_start'] = 1 if timestamp.day == 1 else 0
-            features['is_month_end'] = 1 if timestamp.day >= 28 else 0  # Approximation
-            features['is_quarter_start'] = 1 if timestamp.month in [1, 4, 7, 10] and timestamp.day == 1 else 0
-            features['is_quarter_end'] = 1 if timestamp.month in [3, 6, 9, 12] and timestamp.day >= 28 else 0
             
-            # Trading sessions
-            hour = timestamp.hour
-            features['session_asia'] = 1 if 0 <= hour < 8 else 0
-            features['session_london'] = 1 if 8 <= hour < 16 else 0
-            features['session_ny'] = 1 if 13 <= hour < 21 else 0
-            features['session_overlap'] = 1 if (8 <= hour < 12) or (13 <= hour < 16) else 0
+            # Cyclical time features
+            features['hour_sin'] = np.sin(2 * np.pi * features['hour'] / 24)
+            features['hour_cos'] = np.cos(2 * np.pi * features['hour'] / 24)
+            features['dayofweek_sin'] = np.sin(2 * np.pi * features['dayofweek'] / 7)
+            features['dayofweek_cos'] = np.cos(2 * np.pi * features['dayofweek'] / 7)
             
         except Exception as e:
             logger.error(f"Time feature calculation failed: {str(e)}")
@@ -857,17 +1038,187 @@ class SimplifiedFeatureEngineer:
         """Calculate candle-specific features"""
         try:
             features['body_size'] = abs(candle['close'] - candle['open'])
-            features['upper_wick'] = candle['high'] - max(candle['open'], candle['close'])
-            features['lower_wick'] = min(candle['open'], candle['close']) - candle['low']
-            
-            total_size = features['body_size'] + features['upper_wick'] + features['lower_wick']
-            features['body_ratio'] = features['body_size'] / total_size if total_size > 0 else 0
-            
-            features['high_low_ratio'] = (candle['high'] - candle['low']) / candle['close'] if candle['close'] != 0 else 0
-            features['open_close_ratio'] = (candle['close'] - candle['open']) / candle['open'] if candle['open'] != 0 else 0
+            features['wick_up'] = candle['high'] - max(candle['open'], candle['close'])
+            features['wick_down'] = min(candle['open'], candle['close']) - candle['low']
             
         except Exception as e:
             logger.error(f"Candle feature calculation failed: {str(e)}")
+    
+    def _calculate_risk_features(self, candle, features):
+        """Calculate risk management features"""
+        try:
+            # Calculate ATR-based risk parameters
+            atr_value = abs(features.get('atr_z', 0)) * 0.001 + 0.001
+            current_price = candle['close']
+            
+            # Set SL and TP based on ATR
+            atr_distance = max(atr_value * current_price, 0.0001)  # Minimum distance
+            features['sl_price'] = current_price - (2 * atr_distance)
+            features['tp_price'] = current_price + (3 * atr_distance)
+            
+            # Calculate distances (in pips, assuming 5 decimal places)
+            features['sl_distance'] = abs(current_price - features['sl_price']) * 10000
+            features['tp_distance'] = abs(features['tp_price'] - current_price) * 10000
+            
+            features['log_sl'] = np.log1p(features['sl_price'])
+            
+            # Previous candle features (approximated from current)
+            features['prev_body_size'] = features['body_size'] * 0.95
+            features['prev_wick_up'] = features['wick_up'] * 0.95
+            features['prev_wick_down'] = features['wick_down'] * 0.95
+            
+        except Exception as e:
+            logger.error(f"Risk feature calculation failed: {str(e)}")
+    
+    def _calculate_ratio_features(self, features):
+        """Calculate ratio features"""
+        try:
+            small_value = 1e-6
+            
+            features['price_div_vol'] = features['adj close'] / (features['garman_klass_vol'] + small_value)
+            features['rsi_div_macd'] = features['rsi'] / (features['macd_z'] + small_value)
+            features['price_div_vwap'] = features['adj close'] / (features['vwap'] + small_value)
+            features['sl_div_atr'] = features['sl_distance'] / (abs(features['atr_z']) + small_value)
+            features['tp_div_atr'] = features['tp_distance'] / (abs(features['atr_z']) + small_value)
+            
+            rrr = features['tp_distance'] / (features['sl_distance'] + small_value)
+            features['rrr_div_rsi'] = rrr / (features['rsi'] + small_value)
+            
+        except Exception as e:
+            logger.error(f"Ratio feature calculation failed: {str(e)}")
+    
+    def _calculate_categorical_encodings(self, features, timestamp):
+        """Calculate categorical encodings with if-else logic"""
+        try:
+            # RSI Zone encoding
+            rsi_value = features.get('rsi', 50)
+            if pd.isna(rsi_value):
+                features['rsi_zone_unknown'] = 1
+                features['rsi_zone_neutral'] = 0
+                features['rsi_zone_overbought'] = 0
+                features['rsi_zone_oversold'] = 0
+            elif rsi_value < 30:
+                features['rsi_zone_oversold'] = 1
+                features['rsi_zone_neutral'] = 0
+                features['rsi_zone_overbought'] = 0
+                features['rsi_zone_unknown'] = 0
+            elif rsi_value > 70:
+                features['rsi_zone_overbought'] = 1
+                features['rsi_zone_neutral'] = 0
+                features['rsi_zone_oversold'] = 0
+                features['rsi_zone_unknown'] = 0
+            else:
+                features['rsi_zone_neutral'] = 1
+                features['rsi_zone_overbought'] = 0
+                features['rsi_zone_oversold'] = 0
+                features['rsi_zone_unknown'] = 0
+            
+            # Trend Direction encoding
+            trend_up = features.get('trend_strength_up', 0)
+            trend_down = features.get('trend_strength_down', 0)
+            
+            if trend_up > trend_down:
+                features['trend_direction_uptrend'] = 1
+                features['trend_direction_downtrend'] = 0
+                features['trend_direction_sideways'] = 0
+            elif trend_down > trend_up:
+                features['trend_direction_downtrend'] = 1
+                features['trend_direction_uptrend'] = 0
+                features['trend_direction_sideways'] = 0
+            else:
+                features['trend_direction_sideways'] = 1
+                features['trend_direction_uptrend'] = 0
+                features['trend_direction_downtrend'] = 0
+            
+            # Session encoding
+            hour = features['hour']
+            if 0 <= hour < 6:
+                features['session_q1'] = 0
+                features['session_q2'] = 1
+                features['session_q3'] = 0
+                features['session_q4'] = 0
+            elif 6 <= hour < 12:
+                features['session_q1'] = 0
+                features['session_q2'] = 0
+                features['session_q3'] = 1
+                features['session_q4'] = 0
+            elif 12 <= hour < 18:
+                features['session_q1'] = 0
+                features['session_q2'] = 0
+                features['session_q3'] = 0
+                features['session_q4'] = 1
+            else:
+                features['session_q1'] = 1
+                features['session_q2'] = 0
+                features['session_q3'] = 0
+                features['session_q4'] = 0
+            
+            # Day of week encoding
+            day_str = timestamp.strftime('%A')
+            days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            for day in days:
+                features[f'day_{day}'] = 1 if day == day_str else 0
+            
+        except Exception as e:
+            logger.error(f"Categorical encoding failed: {str(e)}")
+    
+    def _set_trade_defaults(self, features, signal_type, timestamp):
+        """Set default values for trade-specific features with timeframe-aware minutes"""
+        try:
+            # Trade outcome features - M5 has 'result', M15 doesn't
+            if 'result' in features:
+                features['result'] = 0  # Default for M5
+            
+            features['is_bad_combo'] = 0
+            
+            # Volume binning
+            volume = features.get('prev_volume', 0)
+            avg_volume = volume * 1.2  # Approximation
+            features['volume_bin'] = 1 if volume > avg_volume else 0
+            
+            # Dollar volume bin
+            dollar_volume = features.get('adj close', 0) * volume
+            features['dollar_volume_bin'] = 1 if dollar_volume > 1000000 else 0
+            
+            # Trade type encodings based on signal_type
+            signal_upper = signal_type.upper()
+            if 'BUY' in signal_upper:
+                features['crt_BUY'] = 1
+                features['crt_SELL'] = 0
+                features['trade_type_BUY'] = 1
+                features['trade_type_SELL'] = 0
+            elif 'SELL' in signal_upper:
+                features['crt_BUY'] = 0
+                features['crt_SELL'] = 1
+                features['trade_type_BUY'] = 0
+                features['trade_type_SELL'] = 1
+            else:
+                # Default to neutral
+                features['crt_BUY'] = 0
+                features['crt_SELL'] = 0
+                features['trade_type_BUY'] = 0
+                features['trade_type_SELL'] = 0
+            
+            # Combo flags (set to fair by default)
+            features['combo_flag_dead'] = 0
+            features['combo_flag_fair'] = 1
+            features['combo_flag_fine'] = 0
+            features['combo_flag2_dead'] = 0
+            features['combo_flag2_fair'] = 1
+            features['combo_flag2_fine'] = 0
+            
+            # Minute closed features - timeframe specific
+            current_minute = timestamp.minute
+            if self.timeframe == 'M5':
+                minutes = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+            else:  # M15
+                minutes = [0, 15, 30, 45]
+                
+            for minute in minutes:
+                features[f'minutes,closed_{minute}'] = 1 if current_minute >= minute else 0
+                
+        except Exception as e:
+            logger.error(f"Trade default setting failed: {str(e)}")
 
 # ========================
 # SIMPLIFIED GOOGLE SHEETS STORAGE
@@ -932,11 +1283,11 @@ class WorkingTradingBot:
         if timeframe == "M5":
             model_path = os.path.join(MODELS_DIR, "5mbilstm_model.keras")
             scaler_path = os.path.join(MODELS_DIR, "scaler5mcrt.joblib")
-            expected_features = 109  # Based on the error message
+            expected_features = 109  # Based on the exact feature list
         else:  # M15
             model_path = os.path.join(MODELS_DIR, "15mbilstm_model.keras")
             scaler_path = os.path.join(MODELS_DIR, "scaler15mcrt.joblib")
-            expected_features = 87   # Adjust based on your M15 model
+            expected_features = 87   # Based on the exact feature list
             
         logger.debug(f"Model path: {model_path}")
         logger.debug(f"Scaler path: {scaler_path}")
