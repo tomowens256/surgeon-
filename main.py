@@ -1,5 +1,5 @@
 # ========================
-# WORKING TRADING BOT - COMBINED VERSION
+# WORKING TRADING BOT - FIXED VERSION
 # ========================
 
 # Add to your imports section
@@ -827,12 +827,19 @@ class FeatureEngineer:
 
 
 # ========================
-# FIXED MODEL LOADER
+# FIXED MODEL LOADER WITH GRACEFUL ERROR HANDLING
 # ========================
 class ModelLoader:
     def __init__(self, model_path, scaler_path):
         logger.debug(f"Loading model from {model_path}")
         logger.debug(f"Loading scaler from {scaler_path}")
+        
+        # Check if files exist first
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        if not os.path.exists(scaler_path):
+            raise FileNotFoundError(f"Scaler file not found: {scaler_path}")
+            
         try:
             logger.debug("Loading TensorFlow model...")
             self.model = tf.keras.models.load_model(model_path, compile=False)
@@ -899,7 +906,7 @@ class GoogleSheetsStorage:
 
 
 # ========================
-# WORKING TRADING BOT - OLD RELIABLE STRUCTURE
+# WORKING TRADING BOT - WITH GRACEFUL ERROR HANDLING
 # ========================
 class TradingBot:
     def __init__(self, timeframe, credentials):
@@ -921,19 +928,33 @@ class TradingBot:
         logger.debug(f"Model path: {model_path}")
         logger.debug(f"Scaler path: {scaler_path}")
         
+        # Check if model files exist
+        self.model_available = True
         if not os.path.exists(model_path):
             logger.error(f"Model file not found: {model_path}")
+            self.model_available = False
         if not os.path.exists(scaler_path):
             logger.error(f"Scaler file not found: {scaler_path}")
+            self.model_available = False
             
-        try:
-            self.model_loader = ModelLoader(model_path, scaler_path)
-            self.feature_engineer = FeatureEngineer(timeframe)
-            self.data = pd.DataFrame()
-            logger.info(f"Bot initialized for {timeframe}")
-        except Exception as e:
-            logger.error(f"Bot initialization failed: {str(e)}")
-            raise
+        if self.model_available:
+            try:
+                self.model_loader = ModelLoader(model_path, scaler_path)
+                logger.info(f"Model loaded successfully for {timeframe}")
+            except Exception as e:
+                logger.error(f"Model loading failed for {timeframe}: {str(e)}")
+                self.model_available = False
+        else:
+            logger.warning(f"No model available for {timeframe} - running in signal detection mode only")
+        
+        # Always initialize feature engineer
+        self.feature_engineer = FeatureEngineer(timeframe)
+        self.data = pd.DataFrame()
+        
+        if self.model_available:
+            logger.info(f"Bot initialized for {timeframe} with model")
+        else:
+            logger.info(f"Bot initialized for {timeframe} without model (signal detection only)")
 
     def calculate_next_candle_time(self):
         now = datetime.now(NY_TZ)
@@ -970,8 +991,10 @@ class TradingBot:
         confidence = "HIGH" if prediction > PREDICTION_THRESHOLD else "LOW"
         emoji = "🚨" if confidence == "HIGH" else "⚠️"
         
+        model_status = "WITH MODEL" if self.model_available else "NO MODEL - MANUAL"
+        
         message = (
-            f"{emoji} XAU/USD Signal ({self.timeframe})\n"
+            f"{emoji} XAU/USD Signal ({self.timeframe}) {model_status}\n"
             f"Type: {signal_type}\n"
             f"Entry: {signal_data['entry']:.5f}\n"
             f"SL: {signal_data['sl']:.5f}\n"
@@ -1101,12 +1124,16 @@ class TradingBot:
                 if features is None:
                     logger.warning("Feature generation failed")
                     continue
-                    
-                # Get prediction
-                prediction = self.model_loader.predict(features)
-                logger.info(f"Prediction: {prediction:.4f}")
                 
-                # Send signal immediately
+                # Get prediction or use default if no model
+                if self.model_available:
+                    prediction = self.model_loader.predict(features)
+                    logger.info(f"Model prediction: {prediction:.4f}")
+                else:
+                    prediction = 0.5  # Neutral prediction when no model available
+                    logger.info("No model available - using default prediction 0.5")
+                
+                # Send signal immediately (even with default prediction for testing)
                 self.send_signal(signal_type, signal_data, prediction, features)
                     
             except Exception as e:
@@ -1117,7 +1144,7 @@ class TradingBot:
 
 
 # ========================
-# MAIN EXECUTION - SIMPLE AND RELIABLE
+# MAIN EXECUTION - WITH GRACEFUL ERROR HANDLING
 # ========================
 if __name__ == "__main__":
     print("===== WORKING BOT STARTING =====")
@@ -1161,31 +1188,60 @@ if __name__ == "__main__":
     logger.info("All credentials present")
     
     try:
-        # Start bots
-        logger.info("Creating M5 bot")
-        bot_5m = TradingBot("M5", credentials)
-        logger.info("Creating M15 bot")
-        bot_15m = TradingBot("M15", credentials)
+        # Start bots with graceful error handling
+        bots = []
+        threads = []
         
-        # Run in separate threads
-        logger.info("Starting bot threads")
-        t1 = threading.Thread(target=bot_5m.run, name="M5_Bot")
-        t2 = threading.Thread(target=bot_15m.run, name="M15_Bot")
+        # Try to create M5 bot
+        try:
+            logger.info("Creating M5 bot")
+            bot_5m = TradingBot("M5", credentials)
+            t1 = threading.Thread(target=bot_5m.run, name="M5_Bot")
+            t1.daemon = True
+            bots.append(bot_5m)
+            threads.append(t1)
+            t1.start()
+            logger.info("M5 bot thread started")
+        except Exception as e:
+            logger.error(f"Failed to create M5 bot: {str(e)}")
         
-        t1.daemon = True
-        t2.daemon = True
+        # Try to create M15 bot (will fail but shouldn't stop M5)
+        try:
+            logger.info("Creating M15 bot")
+            bot_15m = TradingBot("M15", credentials)
+            t2 = threading.Thread(target=bot_15m.run, name="M15_Bot")
+            t2.daemon = True
+            bots.append(bot_15m)
+            threads.append(t2)
+            t2.start()
+            logger.info("M15 bot thread started")
+        except Exception as e:
+            logger.warning(f"M15 bot creation failed (continuing with M5 only): {str(e)}")
         
-        t1.start()
-        logger.info("M5 bot thread started")
-        t2.start()
-        logger.info("M15 bot thread started")
+        # If no bots were created, exit
+        if not bots:
+            logger.error("No bots could be created. Exiting.")
+            sys.exit(1)
         
         # Keep main thread alive with status updates
         logger.info("Main thread entering monitoring loop")
         while True:
-            logger.info(f"Bot status: M5 {'alive' if t1.is_alive() else 'dead'}, "
-                       f"M15 {'alive' if t2.is_alive() else 'dead'}")
-            time.sleep(60)
+            try:
+                status_messages = []
+                for i, (bot, thread) in enumerate(zip(bots, threads)):
+                    status = "ALIVE" if thread.is_alive() else "DEAD"
+                    model_status = "with model" if bot.model_available else "no model"
+                    status_messages.append(f"{bot.timeframe}: {status} ({model_status})")
+                
+                logger.info(f"Bot status: {', '.join(status_messages)}")
+                time.sleep(60)
+                
+            except KeyboardInterrupt:
+                logger.info("Received keyboard interrupt, shutting down...")
+                break
+            except Exception as e:
+                logger.error(f"Monitoring error: {str(e)}")
+                time.sleep(60)
             
     except Exception as e:
         logger.error(f"Main execution failed: {str(e)}", exc_info=True)
