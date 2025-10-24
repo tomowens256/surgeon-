@@ -1,5 +1,5 @@
 # ========================
-# WORKING TRADING BOT - PANDAS-TA FIXED VERSION
+# WORKING TRADING BOT - PANDAS-TA FIXED VERSION WITH FEATURE TELEGRAM
 # ========================
 
 # Add to your imports section
@@ -238,6 +238,66 @@ def send_telegram(message, token, chat_id):
             time.sleep(2 ** attempt)
     logger.error(f"Failed to send Telegram message after {max_retries} attempts")
     return False
+
+def send_features_telegram(features, signal_type, timeframe, token, chat_id):
+    """Send formatted features to Telegram"""
+    try:
+        logger.debug(f"Preparing to send features to Telegram for {timeframe} {signal_type}")
+        
+        if features is None:
+            logger.warning("No features to send to Telegram")
+            return False
+            
+        # Select key features to display (avoid overwhelming message)
+        key_features = [
+            'rsi', 'rsi_20', 'macd_line', 'macd_z', 'atr_z', 
+            'bb_high', 'bb_mid', 'bb_low', 'vwap', 'volume', 
+            'prev_volume', 'body_size', 'wick_up', 'wick_down',
+            'sl_distance', 'tp_distance', 'rrr', 'log_sl'
+        ]
+        
+        # Build feature summary
+        feature_lines = [f"📊 *{timeframe} {signal_type} FEATURES*"]
+        feature_lines.append("```")
+        
+        for feat in key_features:
+            if feat in features:
+                value = features[feat]
+                if isinstance(value, float):
+                    feature_lines.append(f"{feat}: {value:.5f}")
+                else:
+                    feature_lines.append(f"{feat}: {value}")
+        
+        # Add combo flags if available
+        combo_flags = []
+        for flag_type in ['dead', 'fair', 'fine']:
+            flag1 = f'combo_flag_{flag_type}'
+            flag2 = f'combo_flag2_{flag_type}'
+            if flag1 in features and features[flag1] == 1:
+                combo_flags.append(f"Combo1: {flag_type}")
+            if flag2 in features and features[flag2] == 1:
+                combo_flags.append(f"Combo2: {flag_type}")
+        
+        if combo_flags:
+            feature_lines.append("---")
+            feature_lines.extend(combo_flags)
+        
+        feature_lines.append("```")
+        
+        message = "\n".join(feature_lines)
+        
+        # Send the message
+        success = send_telegram(message, token, chat_id)
+        if success:
+            logger.info(f"Features sent to Telegram for {timeframe} {signal_type}")
+        else:
+            logger.warning(f"Failed to send features to Telegram for {timeframe} {signal_type}")
+            
+        return success
+        
+    except Exception as e:
+        logger.error(f"Error sending features to Telegram: {str(e)}")
+        return False
 
 def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
     """Fetch candles for XAU_USD with full precision and robust error handling"""
@@ -953,7 +1013,6 @@ class FeatureEngineer:
             logger.error(traceback.format_exc())
             return None
 
-
 # ========================
 # FIXED MODEL LOADER WITH GRACEFUL ERROR HANDLING
 # ========================
@@ -987,7 +1046,6 @@ class ModelLoader:
         prediction = self.model.predict(reshaped, verbose=0)[0][0]
         logger.debug(f"Prediction complete: {prediction}")
         return prediction
-
 
 # ========================
 # SIMPLE GOOGLE SHEETS STORAGE
@@ -1032,9 +1090,8 @@ class GoogleSheetsStorage:
             logger.error(f"Signal storage failed: {str(e)}")
             return False
 
-
 # ========================
-# WORKING TRADING BOT - WITH PANDAS-TA FIXES
+# WORKING TRADING BOT - WITH PANDAS-TA FIXES AND FEATURE TELEGRAM
 # ========================
 class TradingBot:
     def __init__(self, timeframe, credentials):
@@ -1141,6 +1198,20 @@ class TradingBot:
             prediction=prediction
         )
     
+    def send_features_to_telegram(self, features, signal_type):
+        """Send generated features to Telegram"""
+        if features is not None:
+            logger.info(f"Sending features to Telegram for {self.timeframe} {signal_type}")
+            send_features_telegram(
+                features, 
+                signal_type, 
+                self.timeframe,
+                self.credentials['telegram_token'], 
+                self.credentials['telegram_chat_id']
+            )
+        else:
+            logger.warning(f"No features to send for {self.timeframe} {signal_type}")
+
     def test_credentials(self):
         """Test both Telegram and Oanda credentials"""
         logger.info("Testing credentials...")
@@ -1253,6 +1324,9 @@ class TradingBot:
                     logger.warning("Feature generation failed")
                     continue
                 
+                # Send features to Telegram immediately after generation
+                self.send_features_to_telegram(features, signal_type)
+                
                 # Get prediction or use default if no model
                 if self.model_available:
                     prediction = self.model_loader.predict(features)
@@ -1269,7 +1343,6 @@ class TradingBot:
                 logger.error(error_msg, exc_info=True)
                 send_telegram(error_msg[:1000], self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                 time.sleep(60)
-
 
 # ========================
 # MAIN EXECUTION - WITH PANDAS-TA FIXES
