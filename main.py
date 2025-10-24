@@ -240,33 +240,30 @@ def send_telegram(message, token, chat_id):
     return False
 
 def send_features_telegram(features, signal_type, timeframe, token, chat_id):
-    """Send formatted features to Telegram"""
+    """Send ALL formatted features to Telegram"""
     try:
-        logger.debug(f"Preparing to send features to Telegram for {timeframe} {signal_type}")
+        logger.debug(f"Preparing to send ALL features to Telegram for {timeframe} {signal_type}")
         
         if features is None:
             logger.warning("No features to send to Telegram")
             return False
             
-        # Select key features to display (avoid overwhelming message)
-        key_features = [
-            'rsi', 'rsi_20', 'macd_line', 'macd_z', 'atr_z', 
-            'bb_high', 'bb_mid', 'bb_low', 'vwap', 'volume', 
-            'prev_volume', 'body_size', 'wick_up', 'wick_down',
-            'sl_distance', 'tp_distance', 'rrr', 'log_sl'
-        ]
-        
-        # Build feature summary
-        feature_lines = [f"📊 *{timeframe} {signal_type} FEATURES*"]
+        # Build feature summary with ALL features
+        feature_lines = [f"📊 *{timeframe} {signal_type} ALL FEATURES*"]
         feature_lines.append("```")
         
-        for feat in key_features:
-            if feat in features:
-                value = features[feat]
-                if isinstance(value, float):
-                    feature_lines.append(f"{feat}: {value:.5f}")
+        # Send ALL features, not just selected ones
+        for feat_name, feat_value in features.items():
+            if isinstance(feat_value, float):
+                # Format floats with appropriate precision
+                if abs(feat_value) < 0.001:
+                    feature_lines.append(f"{feat_name}: {feat_value:.6f}")
+                elif abs(feat_value) < 1:
+                    feature_lines.append(f"{feat_name}: {feat_value:.5f}")
                 else:
-                    feature_lines.append(f"{feat}: {value}")
+                    feature_lines.append(f"{feat_name}: {feat_value:.4f}")
+            else:
+                feature_lines.append(f"{feat_name}: {feat_value}")
         
         # Add combo flags if available
         combo_flags = []
@@ -286,14 +283,47 @@ def send_features_telegram(features, signal_type, timeframe, token, chat_id):
         
         message = "\n".join(feature_lines)
         
-        # Send the message
-        success = send_telegram(message, token, chat_id)
-        if success:
-            logger.info(f"Features sent to Telegram for {timeframe} {signal_type}")
-        else:
-            logger.warning(f"Failed to send features to Telegram for {timeframe} {signal_type}")
+        # If message is too long, split into multiple messages
+        if len(message) > 4000:
+            logger.info("Features message too long, splitting into multiple messages")
+            messages = []
+            current_message = []
+            current_length = 0
             
-        return success
+            for line in feature_lines:
+                line_length = len(line) + 1  # +1 for newline
+                if current_length + line_length > 3500:
+                    messages.append("\n".join(current_message))
+                    current_message = [line]
+                    current_length = line_length
+                else:
+                    current_message.append(line)
+                    current_length += line_length
+            
+            if current_message:
+                messages.append("\n".join(current_message))
+            
+            # Send multiple messages
+            for i, msg in enumerate(messages):
+                part_suffix = f" (Part {i+1}/{len(messages)})" if len(messages) > 1 else ""
+                full_msg = f"📊 *{timeframe} {signal_type} FEATURES{part_suffix}*\n{msg}"
+                success = send_telegram(full_msg, token, chat_id)
+                if success:
+                    logger.info(f"Features part {i+1} sent to Telegram")
+                else:
+                    logger.warning(f"Failed to send features part {i+1} to Telegram")
+                time.sleep(1)  # Small delay between messages
+            
+            return any(success)
+        else:
+            # Send single message
+            success = send_telegram(message, token, chat_id)
+            if success:
+                logger.info(f"All features sent to Telegram for {timeframe} {signal_type}")
+            else:
+                logger.warning(f"Failed to send features to Telegram for {timeframe} {signal_type}")
+            
+            return success
         
     except Exception as e:
         logger.error(f"Error sending features to Telegram: {str(e)}")
