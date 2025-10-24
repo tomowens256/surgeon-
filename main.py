@@ -1078,14 +1078,6 @@ class TradingBot:
         # Always initialize feature engineer
         self.feature_engineer = FeatureEngineer(timeframe)
         self.data = pd.DataFrame()
-        if DEBUG_MODE:
-            feature_summary = f"🔍 {self.timeframe} RAW FEATURES ({len(features)}): "
-            feature_summary += f"RSI: {features.get('rsi', 0):.1f}, "
-            feature_summary += f"MACD: {features.get('macd_z', 0):.3f}, "
-            feature_summary += f"BB_MID: {features.get('bb_mid', 0):.3f}, "
-            feature_summary += f"ATR_Z: {features.get('atr_z', 0):.3f}"
-            send_telegram(feature_summary, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-
         
         if self.model_available:
             logger.info(f"Bot initialized for {timeframe} with model")
