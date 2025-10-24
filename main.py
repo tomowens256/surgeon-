@@ -947,6 +947,12 @@ class FeatureEngineer:
                     features[col] = 0
             
             logger.debug(f"Successfully generated {len(features)} features for {self.timeframe}")
+            # SEND FEATURES TO TELEGRAM - ADD THIS RIGHT BEFORE THE RETURN
+            feature_lines = []
+            for feature_name, feature_value in features.items():
+                feature_lines.append(f"{feature_name}: {feature_value:.6f}")
+            
+            feature_message = f"🔍 {self.timeframe} ALL RAW FEATURES ({len(features)} total):\n" + "\n".join(feature_lines)
             return features
         except Exception as e:
             logger.error(f"Error in generate_features: {str(e)}")
@@ -1078,15 +1084,6 @@ class TradingBot:
         # Always initialize feature engineer
         self.feature_engineer = FeatureEngineer(timeframe)
         self.data = pd.DataFrame()
-
-        feature_lines = []
-        for feature_name, feature_value in features.items():
-            feature_lines.append(f"{feature_name}: {feature_value:.6f}")
-        
-        feature_message = f"🔍 {self.timeframe} ALL RAW FEATURES ({len(features)} total):\n" + "\n".join(feature_lines)
-        
-        # Send to Telegram
-        send_telegram(feature_message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
 
         if self.model_available:
             logger.info(f"Bot initialized for {timeframe} with model")
