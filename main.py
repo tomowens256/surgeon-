@@ -433,10 +433,10 @@ class FeatureEngineer:
         self.timeframe = timeframe
         logger.debug(f"Initializing FeatureEngineer for {timeframe}")
         
-        # Base features in exact order - UPDATED WITH NEW FEATURES
+        # CORRECTED: Base features with exactly the features you want (removed dollar_volume and rrr)
         self.base_features = [
             'adj close', 'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
-            'atr_z', 'macd_line', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
+            'atr_z', 'macd_line', 'macd_z', 'ma_10', 'ma_100', 'vwap', 'vwap_std',
             'upper_band_1', 'lower_band_1', 'upper_band_2', 'lower_band_2', 
             'upper_band_3', 'lower_band_3', 'touches_vwap', 'touches_upper_band_1',
             'touches_upper_band_2', 'touches_upper_band_3', 'touches_lower_band_1',
@@ -446,7 +446,7 @@ class FeatureEngineer:
             'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60', 'bearish_stack',
             'trend_strength_up', 'trend_strength_down', 'sl_price', 'tp_price',
             'prev_volume', 'body_size', 'wick_up', 'wick_down', 'sl_distance',
-            'tp_distance', 'rrr', 'log_sl', 'prev_body_size', 'prev_wick_up',
+            'tp_distance', 'log_sl', 'prev_body_size', 'prev_wick_up',
             'prev_wick_down', 'is_bad_combo', 'volume_bin', 'dollar_volume_bin', 'price_div_vol',
             'rsi_div_macd', 'price_div_vwap', 'sl_div_atr', 'tp_div_atr', 'rrr_div_rsi',
             'hour', 'month', 'dayofweek', 'is_weekend', 'hour_sin', 'hour_cos',
@@ -456,6 +456,19 @@ class FeatureEngineer:
             'rsi_zone_oversold', 'rsi_zone_unknown', 'trend_direction_downtrend',
             'trend_direction_sideways', 'trend_direction_uptrend', 'crt_BUY', 'crt_SELL',
             'trade_type_BUY', 'trade_type_SELL', 'combo_flag_dead', 'combo_flag_fair',
+            'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
+        ]
+        
+        # CORRECTED: Remove dollar_volume from shift_features since it's not in our final features
+        self.shift_features = [
+            'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
+            'atr_z', 'macd_line', 'macd_z', 'ma_10', 'ma_100',
+            'vwap', 'vwap_std', 'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60',
+            'trend_strength_up', 'trend_strength_down', 'volume', 'body_size', 
+            'wick_up', 'wick_down', 'prev_body_size', 'prev_wick_up', 'prev_wick_down', 
+            'is_bad_combo', 'price_div_vol', 'rsi_div_macd', 'price_div_vwap', 
+            'sl_div_atr', 'rrr_div_rsi', 'rsi_zone_neutral', 'rsi_zone_overbought', 
+            'rsi_zone_oversold', 'rsi_zone_unknown', 'combo_flag_dead', 'combo_flag_fair',
             'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
         ]
         
@@ -473,18 +486,11 @@ class FeatureEngineer:
                 'minutes,closed_30', 'minutes,closed_45'
             ]
         
-        # Features to shift
-        self.shift_features = [
-            'garman_klass_vol', 'rsi_20', 'bb_low', 'bb_mid', 'bb_high',
-            'atr_z', 'macd_line', 'macd_z', 'dollar_volume', 'ma_10', 'ma_100',
-            'vwap', 'vwap_std', 'rsi', 'ma_20', 'ma_30', 'ma_40', 'ma_60',
-            'trend_strength_up', 'trend_strength_down', 'volume', 'body_size', 
-            'wick_up', 'wick_down', 'prev_body_size', 'prev_wick_up', 'prev_wick_down', 
-            'is_bad_combo', 'price_div_vol', 'rsi_div_macd', 'price_div_vwap', 
-            'sl_div_atr', 'rrr_div_rsi', 'rsi_zone_neutral', 'rsi_zone_overbought', 
-            'rsi_zone_oversold', 'rsi_zone_unknown', 'combo_flag_dead', 'combo_flag_fair',
-            'combo_flag_fine', 'combo_flag2_dead', 'combo_flag2_fair', 'combo_flag2_fine'
-        ]
+        # Verify feature count
+        expected_count = 109 if timeframe == "M5" else 101
+        actual_count = len(self.features)
+        if actual_count != expected_count:
+            logger.warning(f"Feature count mismatch: expected {expected_count}, got {actual_count}")
         
         self.rsi_bins = [0, 20, 30, 40, 50, 60, 70, 80, 100]
         self.macd_z_bins = [-12.386, -0.496, -0.138, 0.134, 0.527, 9.246]
@@ -626,7 +632,7 @@ class FeatureEngineer:
                 df['macd_line'] = 0
                 df['macd_z'] = 0
             
-            # Dollar volume
+            # Dollar volume (calculated but not included in final features)
             df['dollar_volume'] = (df['adj close'] * df['volume']) / 1e6
             
             # Moving averages - FIXED: Use rolling directly
@@ -753,7 +759,8 @@ class FeatureEngineer:
                 
             df['sl_distance'] = abs(entry - df['sl_price']) * 10000
             df['tp_distance'] = abs(df['tp_price'] - entry) * 10000
-            df['rrr'] = df['tp_distance'] / (df['sl_distance'] + 1e-6)
+            # Calculate rrr for internal use but don't include in final features
+            rrr = df['tp_distance'] / (df['sl_distance'] + 1e-6)
             df['log_sl'] = np.log1p(df['sl_price'])
             
             return df
@@ -764,7 +771,6 @@ class FeatureEngineer:
             df['tp_price'] = entry * 1.01
             df['sl_distance'] = 100
             df['tp_distance'] = 100
-            df['rrr'] = 1.0
             df['log_sl'] = np.log1p(entry)
             return df
 
@@ -1001,7 +1007,9 @@ class FeatureEngineer:
             df['price_div_vwap'] = df['adj close'] / (df['vwap'] + small_value)
             df['sl_div_atr'] = df['sl_distance'] / (abs(df['atr_z']) + small_value)
             df['tp_div_atr'] = df['tp_distance'] / (abs(df['atr_z']) + small_value)
-            df['rrr_div_rsi'] = df['rrr'] / (df['rsi'] + small_value)
+            # Calculate rrr for internal use in rrr_div_rsi but don't include rrr in final features
+            rrr = df['tp_distance'] / (df['sl_distance'] + 1e-6)
+            df['rrr_div_rsi'] = rrr / (df['rsi'] + small_value)
             
             current_row = df.iloc[-1]
             combo_flags = self.calculate_combo_flags(current_row, signal_type)
@@ -1018,23 +1026,31 @@ class FeatureEngineer:
             df['trade_type_BUY'] = int(signal_type == 'BUY')
             df['trade_type_SELL'] = int(signal_type == 'SELL')
             
+            # Create features Series with EXACTLY the features we want
             features = pd.Series(index=self.features, dtype=float)
             for feat in self.features:
                 if feat in df.columns:
                     features[feat] = df[feat].iloc[-1]
                 else:
                     features[feat] = 0
-            
-            # CRITICAL: Using shifted features
+        
+            # CRITICAL: Using shifted features (only for features that exist in our final set)
             if len(df) >= 2:
                 prev_candle = df.iloc[-2]
                 for feat in self.shift_features:
+                    # Only shift if this feature is in our final feature set
                     if feat in features.index and feat in prev_candle:
                         features[feat] = prev_candle[feat]
             
             if features.isna().any():
                 for col in features[features.isna()].index:
                     features[col] = 0
+            
+            # Final verification
+            if len(features) != len(self.features):
+                logger.error(f"Feature count mismatch: generated {len(features)}, expected {len(self.features)}")
+                # Force alignment
+                features = features.reindex(self.features, fill_value=0)
             
             logger.debug(f"Successfully generated {len(features)} features for {self.timeframe}")
             return features
