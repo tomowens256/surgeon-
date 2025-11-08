@@ -1,5 +1,5 @@
 # ========================
-# WORKING TRADING BOT - PANDAS-TA FIXED VERSION WITH FEATURE TELEGRAM
+# ADVANCED TRADING BOT - HTF-DRIVEN MULTI-TIMEFRAME VERSION
 # ========================
 
 # Add to your imports section
@@ -66,8 +66,8 @@ DEBUG_MODE = True  # Enable detailed debugging
 MODEL_MIN_SIZE = 100 * 1024  # 100KB for model files
 SCALER_MIN_SIZE = 2 * 1024   # 2KB for scaler files
 
-# Prediction threshold (0.9140 for class 1)
-PREDICTION_THRESHOLD = 0.9140
+# HTF Prediction threshold for direction
+HTF_PREDICTION_THRESHOLD = 0.60
 
 # Initialize logging with more verbosity
 log_format = '%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s'
@@ -76,7 +76,7 @@ logging.basicConfig(
     format=log_format,
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('trading_bot_working.log')
+        logging.FileHandler('trading_bot_htf_driven.log')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -158,28 +158,7 @@ COMBO_FLAGS2 = {
 }
 
 # ========================
-# COLAB SETUP FUNCTION
-# ========================
-def setup_colab():
-    """Set up environment for Colab without remounting"""
-    logger.debug("Configuring Colab environment...")
-    
-    # Configure logging
-    logging.basicConfig(
-        level=logging.DEBUG if DEBUG_MODE else logging.INFO,
-        format=log_format,
-        handlers=[logging.StreamHandler()]
-    )
-    
-    # Set TensorFlow logging level
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-    tf.get_logger().setLevel('ERROR')
-    
-    logger.info("Colab environment configured")
-    return logger
-
-# ========================
-# UTILITY FUNCTIONS
+# UTILITY FUNCTIONS (Keep existing)
 # ========================
 def parse_oanda_time(time_str):
     """Parse Oanda's timestamp with variable fractional seconds"""
@@ -424,6 +403,104 @@ def fetch_candles(timeframe, last_time=None, count=201, api_key=None):
     
     logger.error(f"Failed to fetch candles after {max_attempts} attempts")
     return pd.DataFrame()
+
+# ========================
+# COLAB SETUP FUNCTION
+# ========================
+def setup_colab():
+    """Set up environment for Colab without remounting"""
+    logger.debug("Configuring Colab environment...")
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.DEBUG if DEBUG_MODE else logging.INFO,
+        format=log_format,
+        handlers=[logging.StreamHandler()]
+    )
+    
+    # Set TensorFlow logging level
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+    tf.get_logger().setLevel('ERROR')
+    
+    logger.info("Colab environment configured")
+    return logger
+
+# ========================
+# FIXED MODEL LOADER WITH GRACEFUL ERROR HANDLING
+# ========================
+class ModelLoader:
+    def __init__(self, model_path, scaler_path):
+        logger.debug(f"Loading model from {model_path}")
+        logger.debug(f"Loading scaler from {scaler_path}")
+        
+        # Check if files exist first
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        if not os.path.exists(scaler_path):
+            raise FileNotFoundError(f"Scaler file not found: {scaler_path}")
+            
+        try:
+            logger.debug("Loading TensorFlow model...")
+            self.model = tf.keras.models.load_model(model_path, compile=False)
+            logger.debug("Model loaded successfully")
+            
+            logger.debug("Loading Scikit-Learn scaler...")
+            self.scaler = joblib.load(scaler_path)
+            logger.debug("Scaler loaded successfully")
+        except Exception as e:
+            logger.error(f"Model loading failed: {str(e)}")
+            raise RuntimeError(f"Model loading failed: {str(e)}")
+        
+    def predict(self, features):
+        logger.debug("Starting prediction...")
+        scaled = self.scaler.transform([features])
+        reshaped = scaled.reshape(1, 1, -1)
+        prediction = self.model.predict(reshaped, verbose=0)[0][0]
+        logger.debug(f"Prediction complete: {prediction}")
+        return prediction
+
+# ========================
+# SIMPLE GOOGLE SHEETS STORAGE
+# ========================
+class GoogleSheetsStorage:
+    def __init__(self, spreadsheet_id):
+        self.spreadsheet_id = spreadsheet_id
+        self.logger = logging.getLogger('gsheets')
+        self.service = None
+        
+    def connect(self):
+        try:
+            from google.colab import auth
+            from google.auth import default
+            from googleapiclient.discovery import build
+            
+            auth.authenticate_user()
+            creds, _ = default()
+            self.service = build('sheets', 'v4', credentials=creds)
+            self.logger.info("Google Sheets connection established")
+            return True
+        except Exception as e:
+            self.logger.warning(f"Google Sheets connection failed: {str(e)}")
+            return False
+    
+    def append_signal(self, timeframe, signal_data, features, prediction):
+        """Simple signal storage"""
+        try:
+            confidence = "HIGH" if prediction > HTF_PREDICTION_THRESHOLD else "LOW"
+            
+            log_message = (
+                f"Signal {timeframe} - {signal_data['signal_type']} | "
+                f"Entry: {signal_data['entry']:.5f} | "
+                f"SL: {signal_data['sl']:.5f} | TP: {signal_data['tp']:.5f} | "
+                f"Pred: {prediction:.4f} ({confidence})"
+            )
+            
+            logger.info(log_message)
+            return True
+            
+        except Exception as e:
+            logger.error(f"Signal storage failed: {str(e)}")
+            return False
 
 # ========================
 # FIXED FEATURE ENGINEER - PANDAS-TA COMPATIBLE
@@ -1060,138 +1137,259 @@ class FeatureEngineer:
             return None
 
 # ========================
-# FIXED MODEL LOADER WITH GRACEFUL ERROR HANDLING
+# HTF ANALYZER CLASS - CORE DIRECTION DETECTION
 # ========================
-class ModelLoader:
-    def __init__(self, model_path, scaler_path):
-        logger.debug(f"Loading model from {model_path}")
-        logger.debug(f"Loading scaler from {scaler_path}")
-        
-        # Check if files exist first
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found: {model_path}")
-        if not os.path.exists(scaler_path):
-            raise FileNotFoundError(f"Scaler file not found: {scaler_path}")
-            
-        try:
-            logger.debug("Loading TensorFlow model...")
-            self.model = tf.keras.models.load_model(model_path, compile=False)
-            logger.debug("Model loaded successfully")
-            
-            logger.debug("Loading Scikit-Learn scaler...")
-            self.scaler = joblib.load(scaler_path)
-            logger.debug("Scaler loaded successfully")
-        except Exception as e:
-            logger.error(f"Model loading failed: {str(e)}")
-            raise RuntimeError(f"Model loading failed: {str(e)}")
-        
-    def predict(self, features):
-        logger.debug("Starting prediction...")
-        scaled = self.scaler.transform([features])
-        reshaped = scaled.reshape(1, 1, -1)
-        prediction = self.model.predict(reshaped, verbose=0)[0][0]
-        logger.debug(f"Prediction complete: {prediction}")
-        return prediction
-
-# ========================
-# SIMPLE GOOGLE SHEETS STORAGE
-# ========================
-class GoogleSheetsStorage:
-    def __init__(self, spreadsheet_id):
-        self.spreadsheet_id = spreadsheet_id
-        self.logger = logging.getLogger('gsheets')
-        self.service = None
-        
-    def connect(self):
-        try:
-            from google.colab import auth
-            from google.auth import default
-            from googleapiclient.discovery import build
-            
-            auth.authenticate_user()
-            creds, _ = default()
-            self.service = build('sheets', 'v4', credentials=creds)
-            self.logger.info("Google Sheets connection established")
-            return True
-        except Exception as e:
-            self.logger.warning(f"Google Sheets connection failed: {str(e)}")
-            return False
+class HTFAnalyzer:
+    """Higher Timeframe Analyzer for 4H and 1H direction detection"""
     
-    def append_signal(self, timeframe, signal_data, features, prediction):
-        """Simple signal storage"""
-        try:
-            confidence = "HIGH" if prediction > PREDICTION_THRESHOLD else "LOW"
-            
-            log_message = (
-                f"Signal {timeframe} - {signal_data['signal_type']} | "
-                f"Entry: {signal_data['entry']:.5f} | "
-                f"SL: {signal_data['sl']:.5f} | TP: {signal_data['tp']:.5f} | "
-                f"Pred: {prediction:.4f} ({confidence})"
-            )
-            
-            logger.info(log_message)
-            return True
-            
-        except Exception as e:
-            logger.error(f"Signal storage failed: {str(e)}")
-            return False
-
-# ========================
-# WORKING TRADING BOT - WITH PANDAS-TA FIXES AND FEATURE TELEGRAM
-# ========================
-class TradingBot:
     def __init__(self, timeframe, credentials):
         self.timeframe = timeframe
         self.credentials = credentials
-        self.logger = logging.getLogger(f"{timeframe}_bot")
+        self.logger = logging.getLogger(f"HTF_{timeframe}")
+        
+        # HTF state - persisted until next candle
+        self.current_direction = None  # 'BUY', 'SELL', or None
+        self.current_prediction = 0.0
+        self.last_analysis_time = None
+        self.next_candle_time = None
+        self.is_active = False
+        
+        # Load HTF model if available
+        model_path = os.path.join(MODELS_DIR, f"{timeframe.lower()}_model.keras")
+        scaler_path = os.path.join(MODELS_DIR, f"scaler_{timeframe.lower()}.joblib")
+        
+        self.model_available = True
+        if not os.path.exists(model_path) or not os.path.exists(scaler_path):
+            self.logger.warning(f"HTF model not available for {timeframe}")
+            self.model_available = False
+        else:
+            try:
+                self.model_loader = ModelLoader(model_path, scaler_path)
+                self.logger.info(f"HTF model loaded for {timeframe}")
+            except Exception as e:
+                self.logger.error(f"HTF model loading failed: {str(e)}")
+                self.model_available = False
+                
+        self.logger.info(f"HTF Analyzer initialized for {timeframe} - Model: {'Available' if self.model_available else 'Not Available'}")
+
+    def calculate_next_htf_candle_time(self):
+        """Calculate when the next HTF candle will close"""
+        now = datetime.now(NY_TZ)
+        
+        if self.timeframe == "H4":
+            # H4 candles: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 (NY time)
+            current_hour = now.hour
+            next_hour = ((current_hour // 4) * 4 + 4) % 24
+            if next_hour < current_hour:  # Next day
+                next_time = now.replace(hour=next_hour, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            else:
+                next_time = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+                
+        else:  # H1
+            next_hour = now.hour + 1
+            if next_hour >= 24:
+                next_time = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            else:
+                next_time = now.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+        
+        return next_time
+
+    def analyze(self):
+        """Analyze HTF and set direction if prediction > 60%"""
+        try:
+            self.logger.info(f"Starting HTF {self.timeframe} analysis...")
+            
+            # Fetch HTF data
+            df = fetch_candles(self.timeframe, count=50, api_key=self.credentials['oanda_api_key'])
+            if df.empty:
+                self.logger.warning(f"No data received for HTF {self.timeframe}")
+                return False
+                
+            # Check if we have a complete current candle
+            current_candle = df.iloc[-1]
+            if not current_candle.get('complete', True):
+                self.logger.info(f"HTF {self.timeframe} current candle not complete, waiting...")
+                return False
+            
+            # Generate features for HTF analysis
+            features = self.generate_htf_features(df)
+            if features is None:
+                self.logger.warning(f"Failed to generate features for HTF {self.timeframe}")
+                return False
+            
+            # Get prediction from model
+            if self.model_available:
+                prediction = self.model_loader.predict(features)
+                self.current_prediction = prediction
+                
+                # Determine direction based on prediction threshold
+                if prediction > HTF_PREDICTION_THRESHOLD:
+                    # Assuming model predicts probability of UP direction
+                    self.current_direction = 'BUY' if prediction > 0.5 else 'SELL'
+                    self.is_active = True
+                else:
+                    self.current_direction = None
+                    self.is_active = False
+            else:
+                # Fallback: Use simple price action for direction
+                self.current_direction = self._simple_direction_analysis(df)
+                self.current_prediction = 0.7 if self.current_direction else 0.3
+                self.is_active = self.current_direction is not None
+            
+            self.last_analysis_time = datetime.now(NY_TZ)
+            self.next_candle_time = self.calculate_next_htf_candle_time()
+            
+            status = "ACTIVE" if self.is_active else "INACTIVE"
+            direction_str = self.current_direction if self.current_direction else "NONE"
+            
+            self.logger.info(f"HTF {self.timeframe} Analysis Complete - "
+                           f"Direction: {direction_str}, Prediction: {self.current_prediction:.3f}, Status: {status}")
+            
+            # Send HTF status to Telegram
+            self.send_htf_status()
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"HTF analysis error: {str(e)}")
+            return False
+
+    def generate_htf_features(self, df):
+        """Generate features for HTF analysis (simplified version)"""
+        try:
+            if len(df) < 20:
+                return None
+                
+            # Use existing FeatureEngineer for consistency
+            feature_engineer = FeatureEngineer(self.timeframe)
+            df = feature_engineer.calculate_technical_indicators(df)
+            
+            # Create simple features array for HTF model
+            # This would need to match your HTF model's expected input
+            features = np.array([
+                df['close'].iloc[-1],
+                df['rsi'].iloc[-1] if 'rsi' in df.columns else 50,
+                df['macd_line'].iloc[-1] if 'macd_line' in df.columns else 0,
+                df['volume'].iloc[-1],
+            ])
+            
+            return features
+            
+        except Exception as e:
+            self.logger.error(f"HTF feature generation error: {str(e)}")
+            return None
+
+    def _simple_direction_analysis(self, df):
+        """Simple fallback direction analysis using price action"""
+        try:
+            if len(df) < 20:
+                return None
+                
+            # Use EMA cross for simple direction
+            ema_9 = df['close'].ewm(span=9).mean().iloc[-1]
+            ema_21 = df['close'].ewm(span=21).mean().iloc[-1]
+            current_price = df['close'].iloc[-1]
+            
+            if current_price > ema_9 and ema_9 > ema_21:
+                return 'BUY'
+            elif current_price < ema_9 and ema_9 < ema_21:
+                return 'SELL'
+            else:
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Simple direction analysis error: {str(e)}")
+            return None
+
+    def send_htf_status(self):
+        """Send HTF status to Telegram"""
+        try:
+            direction_str = self.current_direction if self.current_direction else "NO DIRECTION"
+            status = "🟢 ACTIVE" if self.is_active else "🔴 INACTIVE"
+            next_update = self.next_candle_time.strftime("%H:%M") if self.next_candle_time else "Unknown"
+            
+            message = (
+                f"📊 *HTF {self.timeframe} STATUS UPDATE*\n"
+                f"Direction: {direction_str}\n"
+                f"Prediction: {self.current_prediction:.3f}\n"
+                f"Status: {status}\n"
+                f"Next Update: {next_update} NY\n"
+                f"Last Analysis: {self.last_analysis_time.strftime('%H:%M:%S') if self.last_analysis_time else 'Never'}"
+            )
+            
+            send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+            
+        except Exception as e:
+            self.logger.error(f"Error sending HTF status: {str(e)}")
+
+    def should_allow_ltf_signal(self, ltf_signal_type):
+        """Check if LTF signal should be allowed based on HTF direction"""
+        if not self.is_active:
+            self.logger.info(f"HTF {self.timeframe} not active - rejecting LTF signal")
+            return False
+            
+        if self.current_direction != ltf_signal_type:
+            self.logger.info(f"LTF signal {ltf_signal_type} does not align with HTF direction {self.current_direction}")
+            return False
+            
+        self.logger.info(f"LTF signal {ltf_signal_type} aligns with HTF direction {self.current_direction} - ALLOWING")
+        return True
+
+    def run(self):
+        """Main HTF analysis loop"""
+        thread_name = threading.current_thread().name
+        self.logger.info(f"Starting HTF analyzer thread: {thread_name}")
+        
+        while True:
+            try:
+                # Wait for next HTF candle
+                now = datetime.now(NY_TZ)
+                if self.next_candle_time and now < self.next_candle_time:
+                    sleep_seconds = (self.next_candle_time - now).total_seconds()
+                    if sleep_seconds > 0:
+                        self.logger.debug(f"HTF {self.timeframe} sleeping for {sleep_seconds:.1f}s")
+                        time.sleep(sleep_seconds)
+                
+                # Perform analysis
+                self.analyze()
+                
+                # Small delay before next cycle
+                time.sleep(10)
+                
+            except Exception as e:
+                self.logger.error(f"HTF analyzer error: {str(e)}")
+                time.sleep(60)  # Wait 1 minute on error
+
+# ========================
+# MODELLESS LTF BOT - HTF-DRIVEN
+# ========================
+class HTFDrivenLTFBot:
+    """LTF Bot that only runs when HTF has active direction"""
+    
+    def __init__(self, timeframe, credentials, htf_analyzer):
+        self.timeframe = timeframe
+        self.credentials = credentials
+        self.htf_analyzer = htf_analyzer
+        self.logger = logging.getLogger(f"HTFDriven_{timeframe}")
         self.start_time = time.time()
         self.max_duration = 11.5 * 3600
         
         # Initialize storage
         self.storage = GoogleSheetsStorage('1HZo4uUfeYrzoeEQkjoxwylrqQpKI4R9OfHOZ6zaDino')
         
-        logger.info(f"Initializing {timeframe} bot")
+        # NO MODEL LOADING - running modelless as requested
+        self.model_available = False
+        self.logger.info(f"Initializing MODELLESS {timeframe} bot driven by HTF {htf_analyzer.timeframe}")
         
-        # Load model
-        model_path = os.path.join(MODELS_DIR, "5mbilstm_model.keras" if timeframe == "M5" else "15mbilstm_model.keras")
-        scaler_path = os.path.join(MODELS_DIR, "scaler5mcrt.joblib" if timeframe == "M5" else "scaler15mcrt.joblib")
-        
-        logger.debug(f"Model path: {model_path}")
-        logger.debug(f"Scaler path: {scaler_path}")
-        
-        # Check if model files exist
-        self.model_available = True
-        if not os.path.exists(model_path):
-            logger.error(f"Model file not found: {model_path}")
-            self.model_available = False
-        if not os.path.exists(scaler_path):
-            logger.error(f"Scaler file not found: {scaler_path}")
-            self.model_available = False
-            
-        if self.model_available:
-            try:
-                self.model_loader = ModelLoader(model_path, scaler_path)
-                logger.info(f"Model loaded successfully for {timeframe}")
-            except Exception as e:
-                logger.error(f"Model loading failed for {timeframe}: {str(e)}")
-                self.model_available = False
-        else:
-            logger.warning(f"No model available for {timeframe} - running in signal detection mode only")
-        
-        # Always initialize feature engineer
+        # Initialize feature engineer (for feature generation only)
         self.feature_engineer = FeatureEngineer(timeframe)
         self.data = pd.DataFrame()
-        
-        if self.model_available:
-            logger.info(f"Bot initialized for {timeframe} with model")
-        else:
-            logger.info(f"Bot initialized for {timeframe} without model (signal detection only)")
 
     def calculate_next_candle_time(self):
+        """Calculate next LTF candle time"""
         now = datetime.now(NY_TZ)
         
         if self.timeframe == "M5":
-            # Calculate minutes past the hour
             minutes_past = now.minute % 5
             next_minute = now.minute - minutes_past + 5
             if next_minute >= 60:
@@ -1206,141 +1404,72 @@ class TradingBot:
             else:
                 next_time = now.replace(minute=next_minute, second=0, microsecond=0)
         
-        # Add network latency compensation
         next_time += timedelta(seconds=0.3)
         
-        # If we're at the exact candle start, move to next candle
         if now >= next_time:
             next_time += timedelta(minutes=5 if self.timeframe == "M5" else 15)
         
-        logger.debug(f"Current time: {now}, Next candle: {next_time}")
         return next_time
 
-    def send_signal(self, signal_type, signal_data, prediction, features):
-        """Send formatted signal to Telegram with latency measurement"""
+    def send_htf_aligned_signal(self, signal_type, signal_data, features):
+        """Send signal that is aligned with HTF direction"""
         latency_ms = (datetime.now(NY_TZ) - signal_data['time']).total_seconds() * 1000
-        confidence = "HIGH" if prediction > PREDICTION_THRESHOLD else "LOW"
-        emoji = "🚨" if confidence == "HIGH" else "⚠️"
-        
-        model_status = "WITH MODEL" if self.model_available else "NO MODEL - MANUAL"
         
         message = (
-            f"{emoji} XAU/USD Signal ({self.timeframe}) {model_status}\n"
-            f"Type: {signal_type}\n"
+            f"🎯 *HTF-ALIGNED SIGNAL ({self.timeframe})*\n"
+            f"Type: {signal_type} ✅\n"
+            f"HTF Direction: {self.htf_analyzer.current_direction} 📊\n"
+            f"HTF Confidence: {self.htf_analyzer.current_prediction:.3f}\n"
             f"Entry: {signal_data['entry']:.5f}\n"
             f"SL: {signal_data['sl']:.5f}\n"
             f"TP: {signal_data['tp']:.5f}\n"
-            f"Confidence: {prediction:.4f} ({confidence})\n"
+            f"RRR: 1:4 (MODELLESS)\n"
             f"Latency: {latency_ms:.1f}ms\n"
             f"Time: {signal_data['time'].strftime('%Y-%m-%d %H:%M:%S')}"
         )
+        
         send_telegram(message, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-    
+        
         # Store in Google Sheets
         self.storage.append_signal(
             timeframe=self.timeframe,
             signal_data=signal_data,
             features=features,
-            prediction=prediction
+            prediction=self.htf_analyzer.current_prediction  # Use HTF prediction as confidence
         )
-    
-    def send_features_to_telegram(self, features, signal_type):
-        """Send generated features to Telegram"""
-        if features is not None:
-            logger.info(f"Sending features to Telegram for {self.timeframe} {signal_type}")
-            send_features_telegram(
-                features, 
-                signal_type, 
-                self.timeframe,
-                self.credentials['telegram_token'], 
-                self.credentials['telegram_chat_id']
-            )
-        else:
-            logger.warning(f"No features to send for {self.timeframe} {signal_type}")
-
-    def test_credentials(self):
-        """Test both Telegram and Oanda credentials"""
-        logger.info("Testing credentials...")
-        
-        # Test Telegram
-        test_msg = f"🔧 {self.timeframe} bot credentials test"
-        logger.debug(f"Sending Telegram test: {test_msg}")
-        telegram_ok = send_telegram(test_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-        
-        # Test Oanda
-        oanda_ok = False
-        try:
-            logger.debug("Testing Oanda API with small candle request")
-            test_data = fetch_candles("M5", count=1, api_key=self.credentials['oanda_api_key'])
-            oanda_ok = not test_data.empty
-            logger.debug(f"Oanda test {'succeeded' if oanda_ok else 'failed'}")
-        except Exception as e:
-            logger.error(f"Oanda test failed: {str(e)}")
-            
-        if not telegram_ok:
-            logger.error("Telegram credentials test failed")
-            
-        if not oanda_ok:
-            logger.error("Oanda credentials test failed")
-            
-        logger.info(f"Credentials test result: {'PASS' if telegram_ok and oanda_ok else 'FAIL'}")
-        return telegram_ok and oanda_ok
 
     def run(self):
-        """Main bot execution loop with full context fetching - OLD RELIABLE VERSION"""
+        """Main LTF execution loop - ONLY RUNS WHEN HTF HAS ACTIVE DIRECTION"""
         thread_name = threading.current_thread().name
-        logger.info(f"Starting bot thread: {thread_name}")
+        self.logger.info(f"Starting HTF-driven LTF bot thread: {thread_name}")
         
         session_start = time.time()
-        timeout_msg = f"⏳ {self.timeframe} bot session will expire in 30 minutes"
-        start_msg = f"🚀 {self.timeframe} bot started at {datetime.now(NY_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
-        
-        # Test credentials before starting
-        logger.info("Testing credentials...")
-        creds_valid = self.test_credentials()
-        if not creds_valid:
-            logger.error("Credentials test failed. Exiting bot.")
-            return
-            
-        logger.info("Sending startup message...")
-        telegram_sent = send_telegram(start_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-        logger.info(f"Startup message {'sent' if telegram_sent else 'failed to send'}")
         
         while True:
             try:
-                # Check session time remaining
-                elapsed = time.time() - session_start
-                logger.debug(f"Session time elapsed: {elapsed/3600:.2f} hours")
+                # Check if HTF has active direction
+                if not self.htf_analyzer.is_active:
+                    self.logger.debug(f"HTF {self.htf_analyzer.timeframe} not active - LTF {self.timeframe} sleeping")
+                    time.sleep(30)  # Check every 30 seconds
+                    continue
                 
-                if elapsed > (self.max_duration - 1800) and not hasattr(self, 'timeout_sent'):
-                    logger.warning("Session nearing timeout, sending warning")
-                    send_telegram(timeout_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-                    self.timeout_sent = True
-                    
-                if elapsed > self.max_duration:
-                    logger.warning("Session timeout reached, exiting")
-                    end_msg = f"🔴 {self.timeframe} bot session ended after 12 hours"
-                    send_telegram(end_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
-                    return
-                
-                # Calculate precise wakeup time
+                # HTF is active - proceed with LTF analysis
                 now = datetime.now(NY_TZ)
                 next_candle = self.calculate_next_candle_time()
-                sleep_seconds = max(0, (next_candle - now).total_seconds() - 0.1)  # Wake 100ms early
+                sleep_seconds = max(0, (next_candle - now).total_seconds() - 0.1)
                 
                 if sleep_seconds > 0:
-                    logger.debug(f"Sleeping for {sleep_seconds:.2f} seconds until next candle")
+                    self.logger.debug(f"LTF {self.timeframe} sleeping for {sleep_seconds:.2f}s until next candle")
                     time.sleep(sleep_seconds)
                 
                 # Busy-wait for precise candle open
                 while datetime.now(NY_TZ) < next_candle:
-                    time.sleep(0.001)  # 1ms precision
+                    time.sleep(0.001)
                 
-                logger.debug("Candle open detected - waiting 5s for candle availability")
-                time.sleep(5)  # CRITICAL: Wait for candle to be available
+                self.logger.debug("Candle open detected - waiting 5s for candle availability")
+                time.sleep(5)
                 
-                # Fetch full 201 candles for complete context
-                logger.debug("Fetching full 201 candles for updated context")
+                # Fetch LTF data
                 new_data = fetch_candles(
                     self.timeframe,
                     count=201,
@@ -1348,53 +1477,126 @@ class TradingBot:
                 )
                 
                 if new_data.empty:
-                    logger.error("Failed to fetch candle data")
+                    self.logger.error("Failed to fetch LTF candle data")
                     continue
                     
-                # Update the data
                 self.data = new_data
-                logger.debug(f"Total records: {len(self.data)}")
+                self.logger.debug(f"LTF {self.timeframe} data updated: {len(self.data)} records")
                 
-                # Detect CRT pattern using only current open - OLD RELIABLE METHOD
+                # Detect CRT pattern
                 signal_type, signal_data = self.feature_engineer.calculate_crt_signal(self.data)
                 
                 if not signal_type:
-                    logger.debug("No CRT pattern detected")
+                    self.logger.debug("No CRT pattern detected")
                     continue
                     
-                logger.info(f"CRT pattern detected: {signal_type} at {signal_data['time']}")
+                self.logger.info(f"CRT pattern detected: {signal_type}")
                 
-                # Generate features immediately
+                # Check HTF alignment
+                if not self.htf_analyzer.should_allow_ltf_signal(signal_type):
+                    continue  # Signal doesn't align with HTF direction
+                
+                # Generate features for Telegram
                 features = self.feature_engineer.generate_features(self.data, signal_type)
                 if features is None:
-                    logger.warning("Feature generation failed")
+                    self.logger.warning("Feature generation failed")
                     continue
                 
-                # Send features to Telegram immediately after generation
+                # Send features to Telegram
                 self.send_features_to_telegram(features, signal_type)
                 
-                # Get prediction or use default if no model
-                if self.model_available:
-                    prediction = self.model_loader.predict(features)
-                    logger.info(f"Model prediction: {prediction:.4f}")
-                else:
-                    prediction = 0.5  # Neutral prediction when no model available
-                    logger.info("No model available - using default prediction 0.5")
-                
-                # Send signal immediately (even with default prediction for testing)
-                self.send_signal(signal_type, signal_data, prediction, features)
+                # Send HTF-aligned signal
+                self.send_htf_aligned_signal(signal_type, signal_data, features)
                     
             except Exception as e:
-                error_msg = f"❌ {self.timeframe} bot error: {str(e)}"
-                logger.error(error_msg, exc_info=True)
+                error_msg = f"❌ LTF {self.timeframe} bot error: {str(e)}"
+                self.logger.error(error_msg, exc_info=True)
                 send_telegram(error_msg[:1000], self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
                 time.sleep(60)
 
+    def send_features_to_telegram(self, features, signal_type):
+        """Send features to Telegram"""
+        if features is not None:
+            send_features_telegram(
+                features, 
+                signal_type, 
+                self.timeframe,
+                self.credentials['telegram_token'], 
+                self.credentials['telegram_chat_id']
+            )
+
+    def test_credentials(self):
+        """Test credentials"""
+        logger.info("Testing credentials...")
+        
+        # Test Telegram
+        test_msg = f"🔧 {self.timeframe} HTF-driven bot credentials test"
+        telegram_ok = send_telegram(test_msg, self.credentials['telegram_token'], self.credentials['telegram_chat_id'])
+        
+        # Test Oanda
+        oanda_ok = False
+        try:
+            test_data = fetch_candles("M5", count=1, api_key=self.credentials['oanda_api_key'])
+            oanda_ok = not test_data.empty
+        except Exception as e:
+            logger.error(f"Oanda test failed: {str(e)}")
+            
+        return telegram_ok and oanda_ok
+
 # ========================
-# MAIN EXECUTION - WITH PANDAS-TA FIXES
+# COORDINATED BOT MANAGER - HTF-FIRST APPROACH
+# ========================
+class HTFFirstBotManager:
+    """Manages HTF-first coordinated trading"""
+    
+    def __init__(self, credentials):
+        self.credentials = credentials
+        self.logger = logging.getLogger("HTFFirstManager")
+        
+        # Initialize HTF analyzers
+        self.htf_4h = HTFAnalyzer("H4", credentials)
+        self.htf_1h = HTFAnalyzer("H1", credentials)
+        
+        # Initialize LTF bots with their respective HTF analyzers
+        self.bot_15m = HTFDrivenLTFBot("M15", credentials, self.htf_4h)  # M15 follows H4
+        self.bot_5m = HTFDrivenLTFBot("M5", credentials, self.htf_1h)    # M5 follows H1
+        
+        self.logger.info("HTF-First Bot Manager initialized")
+        
+    def start_all(self):
+        """Start all bots and analyzers"""
+        threads = []
+        
+        # Start HTF analyzers first (they determine if LTF runs)
+        t_htf_4h = threading.Thread(target=self.htf_4h.run, name="HTF_4H_Analyzer")
+        t_htf_1h = threading.Thread(target=self.htf_1h.run, name="HTF_1H_Analyzer")
+        
+        t_htf_4h.daemon = True
+        t_htf_1h.daemon = True
+        
+        threads.extend([t_htf_4h, t_htf_1h])
+        
+        # Start LTF bots (they will wait for HTF direction)
+        t_15m = threading.Thread(target=self.bot_15m.run, name="HTFDriven_M15")
+        t_5m = threading.Thread(target=self.bot_5m.run, name="HTFDriven_M5")
+        
+        t_15m.daemon = True
+        t_5m.daemon = True
+        
+        threads.extend([t_15m, t_5m])
+        
+        # Start all threads
+        for thread in threads:
+            thread.start()
+            self.logger.info(f"Started thread: {thread.name}")
+            
+        return threads
+
+# ========================
+# MAIN EXECUTION - HTF-FIRST APPROACH
 # ========================
 if __name__ == "__main__":
-    print("===== WORKING BOT STARTING =====")
+    print("===== HTF-FIRST TRADING BOT STARTING =====")
     print(f"Start time: {datetime.now(NY_TZ)}")
     
     # Force debug logging to console
@@ -1403,7 +1605,7 @@ if __name__ == "__main__":
     debug_handler.setFormatter(logging.Formatter(log_format))
     logging.getLogger().addHandler(debug_handler)
     
-    logger.info("Starting main execution")
+    logger.info("Starting HTF-first coordinated execution")
     
     try:
         logger = setup_colab()
@@ -1418,69 +1620,57 @@ if __name__ == "__main__":
         'oanda_api_key': os.getenv("OANDA_API_KEY")
     }
     
-    # Log credentials status (without values)
+    # Check credentials
     logger.info("Checking credentials...")
     credentials_status = {k: "SET" if v else "MISSING" for k, v in credentials.items()}
     for k, status in credentials_status.items():
         logger.info(f"{k}: {status}")
     
     if not all(credentials.values()):
-        logger.error("Missing one or more credentials in environment variables")
-        # Send alert if Telegram credentials are available
+        logger.error("Missing one or more credentials")
         if credentials['telegram_token'] and credentials['telegram_chat_id']:
-            send_telegram("❌ Bot failed to start: Missing credentials", 
+            send_telegram("❌ HTF-first bot failed to start: Missing credentials", 
                          credentials['telegram_token'], credentials['telegram_chat_id'])
         sys.exit(1)
     
     logger.info("All credentials present")
     
     try:
-        # Start bots with graceful error handling
-        bots = []
-        threads = []
+        # Create HTF-first bot manager
+        bot_manager = HTFFirstBotManager(credentials)
         
-        # Try to create M5 bot
-        try:
-            logger.info("Creating M5 bot")
-            bot_5m = TradingBot("M5", credentials)
-            t1 = threading.Thread(target=bot_5m.run, name="M5_Bot")
-            t1.daemon = True
-            bots.append(bot_5m)
-            threads.append(t1)
-            t1.start()
-            logger.info("M5 bot thread started")
-        except Exception as e:
-            logger.error(f"Failed to create M5 bot: {str(e)}")
+        # Start all bots
+        threads = bot_manager.start_all()
         
-        # Try to create M15 bot (will fail but shouldn't stop M5)
-        try:
-            logger.info("Creating M15 bot")
-            bot_15m = TradingBot("M15", credentials)
-            t2 = threading.Thread(target=bot_15m.run, name="M15_Bot")
-            t2.daemon = True
-            bots.append(bot_15m)
-            threads.append(t2)
-            t2.start()
-            logger.info("M15 bot thread started")
-        except Exception as e:
-            logger.warning(f"M15 bot creation failed (continuing with M5 only): {str(e)}")
+        logger.info("All HTF-first bots started successfully")
         
-        # If no bots were created, exit
-        if not bots:
-            logger.error("No bots could be created. Exiting.")
-            sys.exit(1)
+        # Send startup message
+        startup_msg = (
+            "🤖 *HTF-FIRST TRADING BOT STARTED* 🤖\n"
+            "• H4 analyzer drives M15 trading\n" 
+            "• H1 analyzer drives M5 trading\n"
+            "• LTF only runs when HTF has >60% prediction\n"
+            "• Signals must align with HTF direction\n"
+            "• LTF running MODELLESS with CRT patterns\n"
+            "• RRR: 1:4 for all signals"
+        )
+        send_telegram(startup_msg, credentials['telegram_token'], credentials['telegram_chat_id'])
         
-        # Keep main thread alive with status updates
+        # Monitor threads
         logger.info("Main thread entering monitoring loop")
         while True:
             try:
-                status_messages = []
-                for i, (bot, thread) in enumerate(zip(bots, threads)):
-                    status = "ALIVE" if thread.is_alive() else "DEAD"
-                    model_status = "with model" if bot.model_available else "no model"
-                    status_messages.append(f"{bot.timeframe}: {status} ({model_status})")
+                alive_threads = [t.name for t in threads if t.is_alive()]
+                dead_threads = [t.name for t in threads if not t.is_alive()]
                 
-                logger.info(f"Bot status: {', '.join(status_messages)}")
+                if dead_threads:
+                    logger.warning(f"Dead threads: {dead_threads}")
+                    
+                # Log HTF status
+                htf_4h_status = "ACTIVE" if bot_manager.htf_4h.is_active else "INACTIVE"
+                htf_1h_status = "ACTIVE" if bot_manager.htf_1h.is_active else "INACTIVE"
+                
+                logger.info(f"HTF Status - H4: {htf_4h_status}, H1: {htf_1h_status} | Active threads: {len(alive_threads)}/{len(threads)}")
                 time.sleep(60)
                 
             except KeyboardInterrupt:
@@ -1489,11 +1679,10 @@ if __name__ == "__main__":
             except Exception as e:
                 logger.error(f"Monitoring error: {str(e)}")
                 time.sleep(60)
-            
+                
     except Exception as e:
-        logger.error(f"Main execution failed: {str(e)}", exc_info=True)
-        # Attempt to send error via Telegram if credentials are available
+        logger.error(f"HTF-first execution failed: {str(e)}", exc_info=True)
         if credentials.get('telegram_token') and credentials.get('telegram_chat_id'):
-            send_telegram(f"❌ Bot crashed: {str(e)[:500]}", 
+            send_telegram(f"❌ HTF-first bot crashed: {str(e)[:500]}", 
                          credentials['telegram_token'], credentials['telegram_chat_id'])
         sys.exit(1)
